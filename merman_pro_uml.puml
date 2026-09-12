@@ -1,0 +1,65 @@
+@startuml
+
+interface MermanControlInterface {
+
+    -std::thread       hsm_thread_
+    -std::atomic<bool> running_{false}
+
+    -std::unique_ptr<StateMachine> state_machine_
+
+    +static MermanControlInterface *GetInstance()
+
+    +static std::string get_control_version()
+    +static std::string get_slam_version()
+    +static std::string get_navigation_version()
+
+    +void UpdateLaserScan(const LaserScan &laser_scan)
+    +void UpdateCamera(const Image &camera)
+    +void UpdateOdom(const Odometry &odom)
+
+    +void StartFsmThread()
+    +void StopFsmThread()
+
+    -bool InitFsm();
+    -bool StartFsm();
+    -void StopFsm();
+    -void LoopFsm();
+}
+
+class StateMachine {
+    +void Init(std::unique_ptr<State> init_state);
+    +void Start();
+    +void Stop();
+    +void Pause();
+    +void Resume();
+    +void Update();
+    +void PostEvent(Event event);
+
+    +void ChangeState(std::unique_ptr<State> new_state);
+
+    +const char* CurrentStateName() const;
+}
+
+abstract class State {
+    +virtual const char* Name() const = 0
+    +virtual void OnEntry(StateMachine& state_machine)
+    +virtual void OnExit(StateMachine& state_machine)
+    +virtual void OnUpdate(StateMachine& state_machine)
+    +virtual void HandleEvent(StateMachine& state_machine, Event event)
+}
+
+class MappingState {
+    +virtual const char* Name() const = 0
+    +void OnEntry(StateMachine& state_machine) override
+    +void OnExit(StateMachine& state_machine) override
+    +void OnUpdate(StateMachine& state_machine) override
+    +bool IsMapFinished()
+    +void HandleEvent(StateMachine& state_machine,Event event) override
+}
+
+
+MermanControlInterface --> StateMachine
+StateMachine --> State
+StateMachine --> State
+
+@enduml

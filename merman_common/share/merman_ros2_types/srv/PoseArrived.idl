@@ -1,0 +1,19 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from merman_ros2_types/srv/PoseArrived.srv
+// generated code does not contain a copyright notice
+
+
+module merman_ros2_types {
+  module srv {
+    struct PoseArrived_Request {
+      int32 pose_id;
+
+      boolean play_audio;
+    };
+    struct PoseArrived_Response {
+      boolean success;
+
+      string message;
+    };
+  };
+};

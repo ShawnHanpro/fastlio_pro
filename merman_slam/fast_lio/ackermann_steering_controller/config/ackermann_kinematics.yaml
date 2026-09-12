@@ -1,0 +1,19 @@
+ackermann_kinematics_node:
+  ros__parameters:
+    wheelbase: 0.5
+    track_width: 0.4
+    wheel_radius: 0.085
+
+    wheel:
+      max_accel: 21.0
+      max_speed: 21.0
+
+    steering:
+      max_angle: 1.5
+
+    base_frame_id: base_link
+    odom_frame_id: odom
+    enable_odom_tf: false
+
+    # Taihu /steer/joint_states name order: [RR, RL, FL, FR]
+    steer_joint_names_rr_rl_fl_fr: ["joint_1", "joint_2", "joint_3", "joint_4"]

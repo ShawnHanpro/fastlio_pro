@@ -1,0 +1,9 @@
+logger:
+  debug: false    # 是否开启 Debug 详细调试级日志，默认 false (Release 简洁模式)。
+  
+  enable: true    # 日志全局开关，若为 false 则关闭全部日志输出，无论Release还是Debug都会关闭（建议常开）
+  async: true     # 异步开关，若为 false 则不启动异步线程，切换为同步直写模式（建议常开）
+  
+  print_tid: true # 线程ID开关，控制是否在日志中打印 [tid:xxxxxx]，无论 Release 还是 Debug 模式都可以切换
+  
+  log_dir: "../logs"

@@ -1,0 +1,73 @@
+pseudo_diff_4wis_controller:
+  ros__parameters:
+    wheelbase: 0.5
+    track_width: 0.4
+    wheel_radius: 0.085
+
+    max_wheel_speed_rad_s: 10.0
+    max_wheel_accel_rad_s2: 5.0
+    max_wheel_decel_rad_s2: 12.0
+
+    # 75 deg
+    max_steering_angle_rad: 1.308996939
+
+    # Nav2 命令超时
+    command_timeout_sec: 0.2
+
+    publish_period_ms: 50
+
+    # --------------------------------------------------------
+    # 控制输入
+    # --------------------------------------------------------
+
+    # teleop_twist_keyboard 默认话题
+    teleop_cmd_vel_topic: /cmd_vel
+
+    # Nav2 专用输出
+    nav2_cmd_vel_topic: /cmd_vel_nav
+
+    # 最近 0.5 秒内收到人工命令，
+    # /cmd_vel 覆盖 /cmd_vel_nav。
+    teleop_priority_timeout_sec: 0.5
+
+    # --------------------------------------------------------
+    # 转向保护
+    # --------------------------------------------------------
+
+    steering_slowdown_angle_rad: 0.6
+    min_speed_scale: 0.15
+
+    # >6.9° 立即禁止驱动轮，<4.0° 才重新允许。
+    steering_gate_engage_angle_rad: 0.12
+    steering_gate_release_angle_rad: 0.07
+
+    # --------------------------------------------------------
+    # Nav2 专用运动模式
+    #
+    # TELEOP 不受这些参数影响。
+    #
+    # DWB 如果要求明显转向，不再执行“边走边转”，而是：
+    #   ROTATE   : vx=0，只原地旋转
+    #   STRAIGHT : wz=0，只直线行驶
+    #
+    # enter / exit 使用回差，防止在临界值频繁切换。
+    # --------------------------------------------------------
+    nav_force_rotate_then_straight: true
+    nav_rotate_enter_wz_rad_s: 0.12
+    nav_rotate_exit_wz_rad_s: 0.06
+    nav_linear_zero_threshold_mps: 0.03
+
+    # Taihu 转向反馈没收到时禁止驱动轮运动。
+    require_steering_feedback: true
+
+    # 顺序：[RR, RL, FL, FR]
+    steer_joint_names_rr_rl_fl_fr:
+      - joint_1
+      - joint_2
+      - joint_3
+      - joint_4
+
+    steer_state_topic: /steer/joint_states
+    steer_cmd_topic: /steer/position_cmd
+
+    wheel_cmd_topic: /wheel_control_can/wheel_rpm_cmd

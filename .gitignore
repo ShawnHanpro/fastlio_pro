@@ -1,0 +1,57 @@
+# ROS2 colcon build outputs
+/merman_ros2_bridge/build/
+/merman_ros2_bridge/install/
+/merman_ros2_bridge/log/
+
+/merman_slam/fast_lio/build/
+/merman_slam/fast_lio/install/
+/merman_slam/fast_lio/log/
+
+# CMake
+*build/
+build*/
+
+*install/
+install*/
+
+# VSCode
+.vscode/
+
+# CLion
+.idea/
+
+# Linux
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+*log/
+*logs/
+log*/
+logs*/
+
+# Shared libraries
+# *.so
+# *.so.*
+# *.a
+
+# IMPORTANT
+!/merman_common/
+!/merman_common/**
+
+merman_common/logs
+
+# Generated maps
+merman_common/maps/2D_map.pgm
+merman_common/maps/2D_map.yaml
+merman_common/maps/3D_map.pcd
+
+# Scan Context runtime data
+merman_common/maps/scan_context/keyframes/
+merman_common/maps/scan_context/poses.txt
+
+__pycache__/
+*.pyc

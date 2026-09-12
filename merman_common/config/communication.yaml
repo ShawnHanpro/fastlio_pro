@@ -1,0 +1,38 @@
+communication:
+  robot_sn: "robot_status"
+
+  enable:
+    ros2_topic: true
+    mqtt: false
+    tcp: false
+    sbus: false
+
+  ros2:
+    node_name: "merman_communication"
+
+    robot_status_topic: "/merman/chassis/robot_status"
+    pub_cmd_vel_topic: "/cmd_vel_nav"
+    pub_audio_play_topic: "/station_arrival"
+
+    local_cmd_topic: "/merman/control/local_cmd"
+    cloud_cmd_topic: "/merman/control/cloud_cmd"
+
+    sub_pose_topic: "/localization_3d"
+    sub_cmd_vel_topic: "/cmd_vel"
+    sub_audio_done_topic: "/audio_done"
+    sub_pause_task_topic: "/pause_task"
+
+    start_task_service: "/start_task"
+    stop_task_service: "/stop_task"
+    pose_arrived_service: "/merman_action/pose_arrivel"
+
+    follow_waypoints_action: "/follow_waypoints"
+    navigation_frame: "map"
+    follow_waypoints_wait_timeout_sec: 2
+
+    status_upload_period_ms: 200
+    pose_log_throttle_ms: 2000
+
+    qos:
+      depth: 10
+      reliability: "reliable"

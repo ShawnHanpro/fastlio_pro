@@ -1,0 +1,6 @@
+msg/PoseArrivedData.idl
+msg/PoseArrivedData.msg
+srv/PoseArrived.idl
+srv/PoseArrived.srv
+srv/PoseArrived_Request.msg
+srv/PoseArrived_Response.msg

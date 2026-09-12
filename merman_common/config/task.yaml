@@ -1,0 +1,14 @@
+task:
+  waypoint:
+    points_file: "../waypoints/waypoints.yaml"
+
+  rotation:
+    angle_tolerance_deg: 3.0
+    kp: 1.5
+    max_angular_speed_rad_s: 0.3
+    min_angular_speed_rad_s: 0.1
+    control_period_ms: 200
+    stable_count_required: 4
+    max_pose_failure_count: 5
+    timeout_sec: 30
+

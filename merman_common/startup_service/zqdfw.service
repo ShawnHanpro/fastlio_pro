@@ -1,0 +1,20 @@
+[Unit]
+Description=Chassis Bringup Service
+
+After=network-online.target nplc.service
+Wants=network-online.target
+Requires=nplc.service
+
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+User=niic
+Environment=ROS_DOMAIN_ID=-1
+ExecStart=/bin/bash /home/niic/slam_nav/merman_common/bin/bringup_g1_fastlio.sh
+
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

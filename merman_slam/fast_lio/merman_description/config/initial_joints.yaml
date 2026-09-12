@@ -1,0 +1,31 @@
+joint_state_publisher:
+  use_sim_time: false
+  joints:
+    car_wheel_fl_Link1_Joint: 0.0
+    car_wheel_fl_Link2_Joint: -0.0
+    car_wheel_fr_Link1_Joint: 0.0
+    car_wheel_fr_Link2_Joint: 0.0
+    car_wheel_rl_Link1_Joint: 0.0
+    car_wheel_rl_Link2_Joint: -0.0
+    car_wheel_rr_Link1_Joint: 0.0
+    car_wheel_rr_Link2_Joint: -0.0
+    backbone_Link1_Joint: 0.0
+    backbone_Link2_Joint: 0.0
+    backbone_Link3_Joint: 0.00
+    upbody_base_Link_Joint: -0.0
+    neck_Link1_Joint: 0.0
+    neck_Link2_Joint: -0.0
+    left_arm_Link1_Joint: 0.0
+    left_arm_Link2_Joint: 0.2618
+    left_arm_Link3_Joint: 0.0
+    left_arm_Link4_Joint: -0.0
+    left_arm_Link5_Joint: 0.0
+    left_arm_Link6_Joint: -0.0
+    left_arm_Link7_Joint: 0.0
+    right_arm_Link1_Joint: 0.0
+    right_arm_Link2_Joint: -0.2618
+    right_arm_Link3_Joint: -0.0
+    right_arm_Link4_Joint: -0.0
+    right_arm_Link5_Joint: 0.0
+    right_arm_Link6_Joint: 0.0
+    right_arm_Link7_Joint: 0.0

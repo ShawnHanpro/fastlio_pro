@@ -1,0 +1,19 @@
+robot_sn: sn-test-s5kf2xq7rpn9tz3p
+ros_domain_id: 98
+
+mqtt:
+  broker: 8.153.160.96
+  port: 3003
+  username: admin
+  password: 1qaz@WSX7edc
+  topic_prefix: robot/loacl/
+  topic_cloud_prefix: robot/info/
+  # 可选；留空则自动按前缀和 robot_sn 组装
+  # 本地控制[语音]：默认 robot/loacl/ctl/{robot_sn}
+  topic_local_cmd:
+  # 云端控制：默认 robot/ctl/{robot_sn}
+  topic_cloud_cmd:
+  topic_ack:
+  topic_send:
+  # 可选；留空则自动生成 robot_bridge_{robot_sn}_{timestamp}
+  client_id:

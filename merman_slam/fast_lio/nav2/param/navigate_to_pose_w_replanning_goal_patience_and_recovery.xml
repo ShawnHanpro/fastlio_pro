@@ -1,0 +1,100 @@
+<!--
+  Modified BT for high-latency base:
+  - Navigate to XY only
+  - Ignore yaw during FollowPath
+  - Explicit Spin AFTER navigation success
+-->
+
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+
+    <!-- 总体 Recovery 仍然保留 -->
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+
+      <!-- 启动阶段：只执行一次 -->
+      <SingleTrigger name="InitialAlignment">
+        <Sequence>
+          <InitialPoseReceived/>
+          <Spin
+            name="StartupSpin"
+            spin_dist="0.0"
+            time_allowance="20.0"/>
+        </Sequence>
+      </SingleTrigger>
+
+      <!-- ⭐ 外层顺序：先导航，再对齐角度 -->
+      <Sequence name="NavigateThenSpin">
+
+        <!-- ================== 原导航逻辑（基本不动） ================== -->
+        <PipelineSequence name="NavigateWithReplanning">
+
+          <RateController hz="1.0">
+            <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+              <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+              <ClearEntireCostmap
+                name="ClearGlobalCostmap-Context"
+                service_name="global_costmap/clear_entirely_global_costmap"/>
+            </RecoveryNode>
+          </RateController>
+
+          <ReactiveSequence name="MonitorAndFollowPath">
+            <PathLongerOnApproach path="{path}" prox_len="3.0" length_factor="2.0">
+              <RetryUntilSuccessful num_attempts="1">
+                <SequenceStar name="CancelingControlAndWait">
+                  <CancelControl name="ControlCancel"/>
+                  <Wait wait_duration="5"/>
+                </SequenceStar>
+              </RetryUntilSuccessful>
+            </PathLongerOnApproach>
+
+            <RecoveryNode number_of_retries="1" name="FollowPath">
+              <!-- FollowPath 只负责到 XY -->
+              <FollowPath path="{path}" controller_id="FollowPath"/>
+              <ClearEntireCostmap
+                name="ClearLocalCostmap-Context"
+                service_name="local_costmap/clear_entirely_local_costmap"/>
+            </RecoveryNode>
+          </ReactiveSequence>
+
+        </PipelineSequence>
+        <!-- ================== 原导航逻辑结束 ================== -->
+
+        <!-- ⭐⭐ 新增：到点后原地旋转对齐角度 ⭐⭐ -->
+        <!-- <Spin
+          name="FinalSpinToGoalYaw"
+          spin_dist="0.0"
+          time_allowance="30.0"/> -->
+
+        <!-- 只在最终目标 Spin -->
+        <Sequence name="SpinOnlyAtFinalGoal">
+          <GoalReached/>
+          <Spin
+            name="FinalSpinToGoalYaw"
+            spin_dist="0.0"
+            time_allowance="30.0"
+            tolerance="0.2"/> 
+        </Sequence>
+
+      </Sequence>
+
+      <!-- ================== 原 Recovery 逻辑，保持不变 ================== -->
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap
+              name="ClearLocalCostmap-Subtree"
+              service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap
+              name="ClearGlobalCostmap-Subtree"
+              service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Spin spin_dist="1.57"/>
+          <Wait wait_duration="5"/>
+          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+        </RoundRobin>
+      </ReactiveFallback>
+
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

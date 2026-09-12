@@ -1,0 +1,10 @@
+std_msgs/Header header
+string[] joint_names
+bool[] enabled
+float64[] position
+float64[] cmd_position
+float64[] velocity
+float64[] torque
+uint16[] status_word
+uint16[] error_code
+int8[] mode_display

@@ -1,0 +1,120 @@
+swerve_controller:
+  ros__parameters:
+    # Parameters extracted only as hardware facts from the supplied old files.
+    # VERIFY ON THE PHYSICAL ROBOT before increasing speed.
+    wheelbase: 0.50
+    track_width: 0.40
+    wheel_radius: 0.085
+
+    # Old runtime config requested +/-90 deg. This value is necessary for exact
+    # arbitrary planar wheel vectors with wheel-speed reversal. Confirm the
+    # mechanical hard limit before operation.
+    steering_min_rad: -1.5707963267948966
+    steering_max_rad:  1.5707963267948966
+
+    max_wheel_rpm: 100.0
+    wheel_vector_deadband_mps: 0.008
+
+    # Narrow +/-90 deg bridge only. It is intentionally restricted to the
+    # endpoint neighborhood; wide endpoint holding breaks rigid-body wheel
+    # geometry and causes tyre scrub.
+    boundary_hold_enter_rad: 1.4311699866   # 82 deg
+    boundary_hold_exit_rad:  1.3089969390   # 75 deg
+
+    # True large-angle guard now uses ROLLING-AXIS error (modulo 180 deg),
+    # not directed steering-motor travel. Therefore +80 -> -80 deg is treated
+    # as a 20 deg rolling-axis mismatch and will NOT trigger stop-turn-go.
+    # Only a genuinely near-perpendicular rolling axis (>80 deg) may latch a
+    # stop/reorientation. In the supplied v6 log, 10/11 old latches were false
+    # branch-equivalent events; only one had a true axis error near 85 deg.
+    large_reconfig_enter_rad: 1.3962634016       # 80 deg rolling-axis error
+    large_reconfig_exit_rad: 0.1745329252        # 10 deg physical settle error
+    large_reconfig_debounce_sec: 0.30
+    large_reconfig_cmd_speed_threshold: 0.10
+    large_reconfig_cooldown_sec: 1.50
+
+    # Chassis limits used as a final hardware-side guard. Nav2 and the velocity
+    # smoother use matching limits in nav2.yaml.
+    max_vx: 0.50
+    max_vy: 0.50
+    max_wz: 0.60
+
+    control_frequency: 50.0
+    cmd_timeout_sec: 0.30
+    steering_feedback_timeout_sec: 0.30
+    wheel_feedback_timeout_sec: 0.50
+    wheel_stop_rpm_threshold: 2.0
+
+    # Continuous driving envelope is also based on ROLLING-AXIS error.
+    # Wheel RPM is projected onto the ACTUAL measured steering axis, so a
+    # branch transition can reverse wheel RPM while the steering motor travels
+    # the long way. The chassis then slows smoothly rather than hard-stopping.
+    drive_full_steering_error_rad: 0.2094395102  # 12 deg
+    drive_stop_steering_error_rad: 1.3089969390  # 75 deg true axis mismatch
+    alignment_exponent: 1.0
+    minimum_alignment_scale: 0.0
+
+    # v9 coordinated branch transition.
+    # If a wheel would need >95 deg of directed steering travel while its rolling
+    # axis is still within 45 deg of the desired axis, latch ONE complete four-
+    # wheel rigid-body target instead of letting MPPI move that target at 50 Hz.
+    # Steering is sent once; wheel RPM is projected onto the measured steering
+    # axes, globally softened through the perpendicular region, and hard-capped
+    # to 12 rpm. This is a low-load crawl, not a stop-turn-go maneuver.
+    branch_transition_physical_error_rad: 1.6580627894  # 95 deg
+    branch_transition_axis_error_rad: 1.0471975512      # legacy validation, 60 deg
+    branch_transition_axis_trigger_rad: 0.7853981634    # 45 deg
+    branch_transition_complete_error_rad: 0.2617993878  # 15 deg physical
+    branch_transition_chassis_scale: 0.18
+    branch_transition_max_rpm: 12.0
+    branch_transition_timeout_sec: 5.0
+
+    # Fixed Taihu PP targets are normally sent only once. If measured steering
+    # fails to improve by at least 1 deg for 0.8 s, re-trigger the SAME target
+    # once. This prevents a stalled PP trigger from holding drive at zero forever
+    # without returning to 50 Hz position retriggering.
+    fixed_target_retrigger_sec: 0.80
+    fixed_target_progress_rad: 0.0174532925  # 1 deg
+
+    wheel_rpm_accel_limit: 300.0
+    wheel_rpm_decel_limit: 400.0
+    # An exact zero from the final safety chain bypasses the internal RPM slew.
+    # Normal Nav2 stopping is already ramped by velocity_smoother; an abrupt
+    # zero is therefore most likely timeout/collision-stop and should be honored.
+    zero_cmd_bypass_rpm_slew: true
+
+    cmd_vel_topic: /cmd_vel
+    steer_cmd_topic: /steer/position_cmd
+    steer_state_topic: /steer/joint_states
+    wheel_cmd_topic: /wheel_control_can/wheel_rpm_cmd
+    wheel_state_topic: /wheel_control_can/state
+
+    # Internal controller order is always [FL, FR, RL, RR].
+    # Existing Taihu feedback names prove:
+    #   joint_1=RR, joint_2=RL, joint_3=FL, joint_4=FR
+    steer_joint_names_fl_fr_rl_rr: [joint_3, joint_4, joint_2, joint_1]
+
+    # Output array mapping, expressed as destination index for each internal
+    # [FL,FR,RL,RR] element.
+    # Taihu /steer/position_cmd expects [RR, RL, FL, FR].
+    steer_cmd_indices_fl_fr_rl_rr: [2, 3, 1, 0]
+
+    # ZLAC /wheel_control_can/wheel_rpm_cmd expects [RF, RR, LF, LR].
+    wheel_cmd_indices_fl_fr_rl_rr: [2, 0, 3, 1]
+
+cmd_vel_arbiter:
+  ros__parameters:
+    nav_topic: /cmd_vel_nav
+    behavior_topic: /cmd_vel_behavior
+    # Standard teleop_twist_keyboard works without remapping.
+    teleop_topic: /cmd_vel
+    # Keep the explicit teleop topic as a second compatible input.
+    teleop_alias_topic: /cmd_vel_teleop
+    output_topic: /cmd_vel_selected
+    nav_timeout: 0.35
+    behavior_timeout: 0.40
+    teleop_timeout: 0.80
+    # NAV->NONE can happen briefly during recovery. Recenter only if NONE
+    # remains stable for this long; any resumed source cancels the pending action.
+    nav_recenter_delay_sec: 1.50
+    publish_frequency: 50.0

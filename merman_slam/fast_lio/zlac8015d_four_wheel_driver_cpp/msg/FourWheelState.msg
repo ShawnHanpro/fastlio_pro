@@ -1,0 +1,22 @@
+std_msgs/Header header
+
+float32 right_front_cmd_rpm
+float32 right_rear_cmd_rpm
+float32 left_front_cmd_rpm
+float32 left_rear_cmd_rpm
+
+float32 right_front_actual_rpm
+float32 right_rear_actual_rpm
+float32 left_front_actual_rpm
+float32 left_rear_actual_rpm
+
+string right_front_motor_state
+string right_rear_motor_state
+string left_front_motor_state
+string left_rear_motor_state
+
+string right_driver_state
+string left_driver_state
+
+uint32 right_fault_code
+uint32 left_fault_code

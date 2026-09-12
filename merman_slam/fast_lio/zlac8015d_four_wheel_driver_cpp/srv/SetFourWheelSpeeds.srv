@@ -1,0 +1,7 @@
+float32 right_front_rpm
+float32 right_rear_rpm
+float32 left_front_rpm
+float32 left_rear_rpm
+---
+bool success
+string message

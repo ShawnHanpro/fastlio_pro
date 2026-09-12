@@ -1,0 +1,39 @@
+battery_node:
+  ros__parameters:
+    # RS485 serial config
+    port: "/dev/ttyTHS1"
+    baudrate: 9600
+    slave_id: 1
+    publish_rate: 1.0
+    serial_timeout: 1.0
+
+    # Battery register range: 0x1000 ~ 0x100C
+    start_register: 4096      # 0x1000
+    register_count: 13
+
+    # LED board config, same RS485 bus, board id = 2
+    led_enabled: true
+    led_board_id: 2
+
+    # Only send LED command when level changes.
+    # Also resend periodically after heartbeat seconds to prevent board state loss.
+    led_update_on_change_only: true
+    led_heartbeat_sec: 30.0
+
+    # SOC thresholds for 5-level battery LED bar
+    # soc <= 0              -> BAT_LEDOFF
+    # 0 < soc <= 28         -> BAT LEVEL1
+    # 28 < soc <= 46        -> BAT LEVEL2
+    # 46 < soc <= 64        -> BAT LEVEL3
+    # 64 < soc <= 82        -> BAT LEVEL4
+    # soc > 82              -> BAT LEVEL5
+    level1_max_soc: 28.0
+    level2_max_soc: 46.0
+    level3_max_soc: 64.0
+    level4_max_soc: 82.0
+
+    # Optional RGB status LED. Disabled by default.
+    # false: only control battery level bar.
+    # true : low battery red, normal green.
+    rgb_status_enabled: false
+    rgb_low_soc_threshold: 20.0

@@ -1,0 +1,127 @@
+/**:
+  ros__parameters:
+    feature_extract_enable: false
+    point_filter_num: 3
+    max_iteration: 3
+    filter_size_surf: 0.5
+    filter_size_map: 0.5
+    cube_side_length: 1000.0
+    runtime_pos_log_enable: false
+    # map_file_path: "./maps/3D_map.pcd"
+    map_file_path: "/home/niic/slam_nav/merman_common/maps/3D_map.pcd"
+
+    common:
+      lid_topic:  "/livox/lidar"
+      # lid_topic: "/livox/custom_msg"
+      imu_topic: "/livox/imu"
+      time_sync_en: false # ONLY turn on when external time synchronization is really not possible
+      time_offset_lidar_to_imu:
+        0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
+        # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
+
+    preprocess:
+      lidar_type: 1 # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 4 for any other pointcloud input
+      scan_line: 4
+      blind: 0.5
+      timestamp_unit: 3
+      scan_rate: 10
+
+    mapping:
+      acc_cov: 0.1
+      gyr_cov: 0.1
+      b_acc_cov: 0.0001
+      b_gyr_cov: 0.0001
+      fov_degree: 360.0
+      det_range: 100.0
+      extrinsic_est_en: false # true: enable the online estimation of IMU-LiDAR extrinsic
+      extrinsic_T: [-0.011, -0.02329, 0.04412]
+      extrinsic_R: [1., 0., 0., 0., 1., 0., 0., 0., 1.]
+      mapping_min_range: 0.10
+      mapping_max_range: 20.0
+
+    publish:
+      path_en: true # true: publish Path
+      effect_map_en: false # true: publish Effects
+      map_en: true # true: publish Map cloud
+      scan_publish_en: true # false: close all the point cloud output
+      dense_publish_en: false # false: low down the points number in a global-frame point clouds scan.
+      scan_bodyframe_pub_en: false # true: output the point cloud scans in IMU-body-frame
+      livox_scan_pub_en: true
+
+    pcd_save:
+      pcd_save_en: true
+      interval:
+        -1 # how many LiDAR frames saved in each pcd file;
+        # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+
+    frames:
+      # IMU 原点相对于 base_link 的位置
+      # x 向前，y 向左，z 向上
+      base_to_imu_T:
+        [0.25, 0.192, 0.2955]
+
+      # IMU 与 base_link 方向一致，因此使用单位矩阵
+      # 行优先：
+      # [r00, r01, r02,
+      #  r10, r11, r12,
+      #  r20, r21, r22]
+      base_to_imu_R:
+        [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+
+        # [-1.0,  0.0, 0.0,
+        # 0.0, -1.0, 0.0,
+        # 0.0,  0.0, 1.0]
+
+    occupancy_2d:
+      enable: true
+
+      frame_id: "map"
+      resolution: 0.05
+
+      min_range: 0.30
+      max_range: 15.0
+
+      ground_min_height: -0.15
+      obstacle_min_height: 0.10
+      obstacle_max_height: 1.80
+
+      robot_clear_radius: 0.35
+
+      input_frame_stride: 2
+      point_step: 2
+      angular_bins: 720
+      queue_size: 2
+
+      # RViz地图每秒刷新一次
+      publish_period: 1.0
+
+      # 每30秒覆盖保存一次
+      auto_save_period: -1.0
+
+      save_prefix: "/home/niic/slam_nav/merman_common/maps/2D_map"
+
+      # 正常关闭节点时再保存最后一次
+      save_on_shutdown: false
+
+    scan_context_keyframe:
+      enable: true
+
+      save_dir: "/home/niic/slam_nav/merman_common/maps/scan_context"
+
+      # 移动超过2m保存
+      min_translation: 2.0
+
+      # 原地旋转超过20度也保存
+      min_rotation_deg: 20.0
+
+      # 保存前点云降采样
+      voxel_size: 0.20
+
+      # Scan Context使用范围
+      min_range: 0.50
+      max_range: 30.0
+
+      # 防止异常空点云
+      min_points: 200

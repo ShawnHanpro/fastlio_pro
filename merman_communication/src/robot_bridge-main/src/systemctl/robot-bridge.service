@@ -1,0 +1,20 @@
+[Unit]
+Description=Robot Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=PYTHONUNBUFFERED=1
+# Placeholder path; startup.sh will rewrite to the current repo path.
+Environment=PYTHONPATH=/ros
+WorkingDirectory=/ros
+ExecStart=/usr/bin/env bash -lc 'source /opt/ros/humble/setup.bash && python3 -m robot_bridge'
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

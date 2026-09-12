@@ -1,0 +1,57 @@
+scan_context_relocalization:
+  ros__parameters:
+    # Production mode: build the Scan Context DB from real mapping keyframes.
+    database_mode: "keyframes"
+    keyframe_root: "/home/niic/slam_nav/merman_common/maps/scan_context"
+    keyframe_poses_file: "poses.txt"
+
+    # Only used if database_mode is changed back to "static_grid".
+    map_path: "/home/niic/slam_nav/merman_common/maps/3D_map.pcd"
+    map_frame: "map"
+
+    lidar_topic: "/livox/lidar"
+    base_frame: "base_link"
+    fallback_lidar_frame: "imu_link"
+    tf_timeout_sec: 0.30
+
+    # static_grid fallback parameters
+    database_grid_step: 2.0
+    database_margin: 0.0
+    map_base_z: 0.0
+    min_local_map_points: 100
+
+    # Keyframe database and query should use roughly comparable point density.
+    map_voxel_size: 0.20
+    query_voxel_size: 0.20
+    query_min_range: 0.50
+    query_max_range: 20.0
+    min_query_points: 150
+
+    # Scan Context
+    sc_lidar_height: 2.0
+    sc_pc_num_ring: 20
+    sc_pc_num_sector: 60
+    sc_pc_max_radius: 20.0
+    sc_search_ratio: 0.10
+
+    # With a real keyframe DB, start with 30 retrieval candidates and return
+    # Top-5 to Open3D ICP later.
+    sc_knn_candidates: 30
+    sc_top_k: 5
+
+    # Keep false for the first validation. After checking several locations,
+    # enable thresholding based on the observed correct-match distances.
+    require_sc_threshold: false
+    sc_distance_threshold: 0.18
+
+    # Current map->base yaw = keyframe_map_yaw + yaw_sign * SC sector shift.
+    # If XY/keyframe ID is correct but the yaw direction is reversed, only flip
+    # yaw_sign between -1 and +1.
+    yaw_sign: -1.0
+    yaw_offset: 0.0
+
+    publish_initialpose: true
+    initialpose_xy_variance: 4.0
+    initialpose_z_variance: 1.0
+    initialpose_rp_variance: 1.0
+    initialpose_yaw_variance: 0.5

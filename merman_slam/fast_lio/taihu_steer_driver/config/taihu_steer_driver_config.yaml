@@ -1,0 +1,24 @@
+taihu_steer_driver:
+  ros__parameters:
+    cpu_affinity: 1
+    priority: 90
+    interval: 0
+    cycle_time_ns: 5000000
+    shift_time_ns: 0
+
+    motor_offset: [0, 0, 0, 0]
+    # motor_offset: [73967, 22595, -63344, 42586]
+    motor_dir: [-1, -1, -1, -1]
+    motor_max_torque_nm: [13.5, 13.5, 13.5, 13.5]
+
+    joint_names: ["joint_1", "joint_2", "joint_3", "joint_4"]
+    encoder_resolution: 262144.0
+    max_motor_speed_rpm: 4949
+    pp_velocity: 2621440
+    pp_acceleration: 13107200
+    pp_deceleration: 13107200
+    pp_jerk: 131072000
+    auto_enable: false
+    emergency_stop_shutdown_enabled: true
+    emergency_stop_error_code: 12576
+    emergency_stop_shutdown_consecutive_cycles: 3

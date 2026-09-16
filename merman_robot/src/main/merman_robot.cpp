@@ -43,7 +43,7 @@ void ShowVersionLogo() {
         MermanControlInterface::get_navigation_version();
     merman_communication_version =
         merman_control_ptr->get_communication_version();
-    merman_logger_verison = MermanLogger::get_logger_version();
+    // merman_logger_verison = MermanLogger::get_logger_version();
 
 
     std::cout << "merman_robot_version:         " << merman_robot_version
@@ -54,7 +54,7 @@ void ShowVersionLogo() {
               << merman_communication_version << std::endl;
 
 
-    std::cout << "merman_logger_verison: "        << merman_logger_verison << std::endl;
+    // std::cout << "merman_logger_verison: "        << merman_logger_verison << std::endl;
 }
 
 void StartThread() {
@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
             debug_mode = (std::string(argv[i + 1]) == "true");
         }
     }
-    MermanLogger::GetInstance()->Initialize("../logs", debug_mode);
+    // MermanLogger::GetInstance()->Initialize("../logs", debug_mode);
 
     // 注册 Ctrl+C / kill 信号
     std::signal(SIGINT, SignalHandler);

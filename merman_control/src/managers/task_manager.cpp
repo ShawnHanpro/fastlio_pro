@@ -245,23 +245,35 @@ bool TaskManager::PauseTask(bool pause_task)
         return true;
     }
 
-    std::cout
-        << "[TaskManager] 恢复当前任务"
-        << std::endl;
+    std::cout << "[TaskManager] 恢复当前任务" << std::endl;
 
     /*
-     * 当前 waypoint 并没有删除。
+     * 如果当前已经到点，并且正在等待 audio_done，
+     * 恢复时不能重新发送 Nav2。
      *
-     * 恢复时重新执行当前 waypoint。
-     *
-     * 必须清除 last_nav2_point_，
-     * 否则 SetNav2Waypoints() 会认为当前点和上一次发送点
-     * 距离为0，从而走“小于5cm直接旋转”的逻辑。
+     * 正确行为：
+     * - 只解除 pause_task_
+     * - 保留 waiting_audio_done_
+     * - 等 audio_done 回来后，由 AudioDone() 推进下一个点
      */
     {
-        std::lock_guard<std::mutex> lock(
-            last_nav2_point_mutex_);
+        std::lock_guard<std::mutex> lock(audio_state_mutex_);
 
+        if (waiting_audio_done_) {
+            std::cout
+                << "[TaskManager] 当前正在等待AudioDone，恢复后不重新发送Nav2"
+                << ", waiting_pose_id=" << waiting_audio_pose_id_ << std::endl;
+
+            return true;
+        }
+    }
+
+    /*
+     * 只有不是等待 audio_done 的状态，
+     * 才说明暂停发生在导航过程中，需要重新下发当前点。
+     */
+    {
+        std::lock_guard<std::mutex> lock(last_nav2_point_mutex_);
         has_last_nav2_point_ = false;
     }
 
@@ -401,13 +413,13 @@ bool TaskManager::set_nav2_status(std::string& status)
              * 因为上面的处理过程中，另一个ROS线程可能刚好收到pause。
              */
             if (pause_task_.load()) {
-                std::cout << "[TaskManager] 启动旋转前检测到任务暂停"
+                std::cout << "[TaskManager] 到点处理前检测到任务暂停"
                           << std::endl;
                 return true;
             }
 
             if (!StartRotationAsync(waypoint)) {
-                std::cerr << "[TaskManager] 启动原地旋转失败:"
+                std::cerr << "[TaskManager] 启动到点处理失败:"
                           << " point_id=" << waypoint.point_id << std::endl;
 
                 task_running_.store(false);
@@ -633,12 +645,12 @@ bool TaskManager::SetNav2Waypoints()
 
     // ============================================================
     // 距离小于5cm：
-    // 不发送Nav2，直接执行目标角度旋转
+    // 不发送Nav2，直接执行到点处理
     // ============================================================
     if (skip_nav2_navigation) {
         std::cout
             << "[TaskManager] 当前点与上一次Nav2点距离小于5cm，"
-            << "跳过Nav2导航，直接执行旋转:"
+            << "跳过Nav2导航，直接执行到点处理:"
             << " id=" << waypoint.point_id
             << ", x=" << waypoint.point.x
             << ", y=" << waypoint.point.y
@@ -658,7 +670,7 @@ bool TaskManager::SetNav2Waypoints()
 
         if (!StartRotationAsync(waypoint)) {
             std::cerr
-                << "[TaskManager] 跳过Nav2后启动旋转失败:"
+                << "[TaskManager] 跳过Nav2后启动到点处理失败:"
                 << " id=" << waypoint.point_id
                 << std::endl;
 
@@ -1076,14 +1088,15 @@ bool TaskManager::StartRotationAsync(WayPoints waypoint)
 
     if (rotation_running_.load()) {
         std::cerr
-            << "[TaskManager] 当前已有旋转任务正在执行"
+            << "[TaskManager] 当前已有到点处理正在执行"
             << std::endl;
 
         return false;
     }
 
     /*
-     * 回收上一次已经结束、但还没有join的线程。
+     * 保留原来的线程对象和停止接口，避免修改头文件和外部调用。
+     * 但这里不再执行 Rotation()，Nav2 到点后直接进入到点通知/音频流程。
      */
     if (rotation_thread_.joinable()) {
         if (rotation_thread_.get_id() !=
@@ -1099,50 +1112,18 @@ bool TaskManager::StartRotationAsync(WayPoints waypoint)
 
     rotation_thread_ = std::thread(
         [this, waypoint]() {
-            const bool rotation_success =
-                Rotation(waypoint.point.theta);
-
-            /*
-             * 无论旋转成功还是失败，都确保底盘停止。
-             */
+            // 不再执行原地旋转，只保证底盘停止后继续后续到点流程。
             set_cmd_vel(0.0, 0.0);
 
-            if (!rotation_success) {
-                rotation_running_.store(false);
-
-                if (pause_task_.load()) {
-                    std::cout << "[TaskManager] 原地旋转因任务暂停而停止"
-                              << ", pose_id=" << waypoint.point_id << std::endl;
-
-                    return;
-                }
-
-                if (rotation_stop_requested_.load()) {
-                    std::cout << "[TaskManager] 旋转任务已停止"
-                              << ", pose_id=" << waypoint.point_id << std::endl;
-
-                    return;
-                }
-
-                std::cerr << "[TaskManager] 旋转任务失败"
-                          << ", pose_id=" << waypoint.point_id << std::endl;
-
-                task_running_.store(false);
-                return;
-            }
-
             std::cout
-                << "[TaskManager] 原地旋转完成"
+                << "[TaskManager] Nav2到点后不执行原地旋转，直接处理到点"
                 << ", pose_id=" << waypoint.point_id
-                << ", target_theta="
-                << waypoint.point.theta
+                << ", target_theta=" << waypoint.point.theta
                 << std::endl;
 
             /*
-             * 旋转逻辑已经完成。
-             *
              * 必须在可能发送下一个导航点前设置为false，
-             * 否则下一个点很快成功时会被判断为仍在旋转。
+             * 否则下一个点很快成功时会被判断为仍在处理。
              */
             rotation_running_.store(false);
 

@@ -95,8 +95,8 @@
 // add mode change
 #include <std_srvs/srv/set_bool.hpp>
 
-// pub livox scan
-#include <sensor_msgs/msg/laser_scan.hpp>
+// /nav2_scan is generated directly inside livox_ros_driver2, so it is no
+// longer coupled to this mapping loop.
 
 #define INIT_TIME (0.1)
 #define LASER_POINT_COV (0.001)
@@ -203,8 +203,7 @@ int iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0,
     laserCloudValidNum = 0, pcd_save_interval = -1, pcd_index = 0;
 bool point_selected_surf[100000] = {0};
 bool lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
-bool scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false,
-     livox_scan_pub_en = false;
+bool scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 bool is_first_lidar = true;
 
 vector<vector<int>>  pointSearchInd_surf;
@@ -263,11 +262,6 @@ geometry_msgs::msg::PoseStamped msg_body_pose;
 
 // add base_link
 geometry_msgs::msg::PoseStamped msg_base_pose;
-
-// pub livox scan
-// 保存最新Livox原始数据，用于scan生成
-livox_ros_driver2::msg::CustomMsg::SharedPtr latest_livox_msg_ = nullptr;
-std::mutex                                   livox_scan_mutex;
 
 shared_ptr<Preprocess> p_pre(new Preprocess());
 shared_ptr<ImuProcess> p_imu(new ImuProcess());
@@ -572,13 +566,6 @@ void   livox_pcl_cbk_old(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg)
 
 void livox_pcl_cbk(const livox_ros_driver2::msg::CustomMsg::UniquePtr msg) {
     double cur_time = get_time_sec(msg->header.stamp);
-
-    // pub livox scan
-    {
-        std::lock_guard<std::mutex> lock(livox_scan_mutex);
-        latest_livox_msg_ =
-            std::make_shared<livox_ros_driver2::msg::CustomMsg>(*msg);
-    }
 
     PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
 
@@ -1686,9 +1673,6 @@ public:
         this->declare_parameter<double>("mapping.mapping_min_range", 0.10);
         this->declare_parameter<double>("mapping.mapping_max_range", 30.0);
 
-        // pub livox scan
-        this->declare_parameter<bool>("publish.livox_scan_pub_en", true);
-
 #if SAVE_KEYFRAME
         // add keyframe save
         this->declare_parameter<bool>("scan_context_keyframe.enable", true);
@@ -1820,10 +1804,6 @@ public:
                                        mapping_min_range, 0.10);
         this->get_parameter_or<double>("mapping.mapping_max_range",
                                        mapping_max_range, 30.0);
-
-        // pub livox scan
-        this->get_parameter_or<bool>("publish.livox_scan_pub_en",
-                                     livox_scan_pub_en, true);
 
 #if SAVE_KEYFRAME
         // add keyframe save
@@ -1975,10 +1955,6 @@ public:
         pubLaserCloudMap_ =
             this->create_publisher<sensor_msgs::msg::PointCloud2>(
                 "/Laser_map_1", cloud_qos);
-
-        // pub livox scan
-        pub_livox_scan_ = this->create_publisher<sensor_msgs::msg::LaserScan>(
-            "/nav2_scan", 10);
 
         sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
             imu_topic, 200, imu_cbk);
@@ -3209,76 +3185,6 @@ private:
                     "Published static TF: base_link -> livox_frame");
     }
 
-    // pub livox scan
-    void publish_livox_scan() {
-        auto   now = this->get_clock()->now();
-        double current_time = now.seconds();
-
-        static double last_scan_pub_time_ = 0.0;
-        static double last_livox_scan_stamp_ = 0.0;
-
-        if (current_time - last_scan_pub_time_ < scan_publish_period_) {
-            return;
-        }
-
-        livox_ros_driver2::msg::CustomMsg::SharedPtr msg;
-        {
-            std::lock_guard<std::mutex> lock(livox_scan_mutex);
-
-            if (!latest_livox_msg_) return;
-
-            msg = latest_livox_msg_;
-        }
-
-        // 判断是不是新数据
-        double msg_time = get_time_sec(msg->header.stamp);
-        if (msg_time <= last_livox_scan_stamp_) {
-            return;
-        }
-        last_livox_scan_stamp_ = msg_time;
-
-        sensor_msgs::msg::LaserScan scan;
-        scan.header.stamp = msg->header.stamp;
-        scan.header.frame_id = "imu_link";
-        scan.angle_min = -M_PI;
-        scan.angle_max = M_PI;
-        int beam_num = 720;
-        scan.angle_increment = (scan.angle_max - scan.angle_min) / beam_num;
-        scan.range_min = 0.1;
-        scan.range_max = 30.0;
-        scan.ranges.assign(beam_num, std::numeric_limits<float>::infinity());
-
-        for (auto &p : msg->points) {
-            if (p.line != 2 && p.line != 3) continue;
-
-            V3D p_lidar(p.x, p.y, p.z);
-            V3D p_imu =
-                state_point.offset_R_L_I * p_lidar + state_point.offset_T_L_I;
-
-            float x = p_imu(0);
-            float y = p_imu(1);
-            float z = p_imu(2);
-
-            // 高度过滤
-            if (z < -0.3 || z > 1.5 || (x < 0.3 && x > -1.0) || (y < 0.2 && y > -0.6)) continue;
-            float range = sqrt(x * x + y * y);
-            if (range < scan.range_min || range > scan.range_max) continue;
-
-            float angle = atan2(y, x);
-            int   index = (angle - scan.angle_min) / scan.angle_increment;
-
-            if (index >= 0 && index < beam_num) {
-                if (range < scan.ranges[index]) {
-                    scan.ranges[index] = range;
-                }
-            }
-        }
-
-        pub_livox_scan_->publish(scan);
-
-        last_scan_pub_time_ = current_time;
-    }
-
     void timer_callback() {
         ThreadWallTimer cpu_wall_timer;
 
@@ -3564,11 +3470,6 @@ private:
             if (effect_pub_en) publish_effect_world(pubLaserCloudEffect_);
             // if (map_pub_en) publish_map(pubLaserCloudMap_);
 
-            // pub livox scan
-            if (livox_scan_pub_en) {
-                publish_livox_scan();
-            }
-
             const double publish_end = omp_get_wtime();
 
             double pub_path = (pub_path_t1 - pub_path_t0) * 1000;
@@ -3714,9 +3615,6 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
         pubLaserCloudMap_;
 
-    // pub livox scan
-    rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr pub_livox_scan_;
-
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr  pubOdomAftMapped_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr      pubPath_;
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
@@ -3750,9 +3648,6 @@ private:
                            aver_time_solve = 0, aver_time_const_H_time = 0;
     bool   flg_EKF_converged, EKF_stop_flg = 0;
     double epsi[23] = {0.001};
-
-    // pub livox scan
-    double scan_publish_period_ = 0.1;  // 秒
 
     // pub point cloud
     double cloud_publish_period_ = 0.1;  // 秒

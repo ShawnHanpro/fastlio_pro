@@ -62,11 +62,47 @@ export PYTHONUNBUFFERED=1
 
 CAN_IFACE="${CAN_IFACE:-can0}"
 CAN_BITRATE="${CAN_BITRATE:-500000}"
+CAN_READY_WAIT_SEC="${CAN_READY_WAIT_SEC:-15}"
+CAN_READY=0
 
 # Taihu EtherCAT bus is expected to contain exactly four steering motor slaves.
 TAIHU_EXPECTED_SLAVES="${TAIHU_EXPECTED_SLAVES:-4}"
+TAIHU_MASTER_WAIT_SEC="${TAIHU_MASTER_WAIT_SEC:-15}"
 TAIHU_SLAVE_WAIT_SEC="${TAIHU_SLAVE_WAIT_SEC:-15}"
+TAIHU_ETHERCAT_MASTER_READY=0
 TAIHU_ETHERCAT_READY=0
+
+# Motor services are created asynchronously by the two driver nodes.  Do not
+# fail only because a service appears a few seconds late: wait and retry until
+# the motor is positively verified enabled.
+MOTOR_SERVICE_POLL_SEC="${MOTOR_SERVICE_POLL_SEC:-1}"
+MOTOR_ENABLE_RETRY_SEC="${MOTOR_ENABLE_RETRY_SEC:-2}"
+ZLAC_ENABLE_VERIFY_SEC="${ZLAC_ENABLE_VERIFY_SEC:-5}"
+TAIHU_ENABLE_VERIFY_SEC="${TAIHU_ENABLE_VERIFY_SEC:-10}"
+
+# ============================================================
+# CPU affinity
+#
+# CPU0   : OS / interrupts / DDS daemons / background programs
+# CPU1   : EtherCAT realtime thread (set by Taihu cpu_affinity)
+# CPU2-4 : Livox / FAST-LIO / Open3D localization
+# CPU5   : chassis / command smoothing / collision monitoring
+# CPU6   : controller_server (MPPI + local costmap)
+# CPU7   : planner / behavior server / behavior tree
+#
+# These defaults can be overridden from the environment for diagnostics.
+# Keep CPU1 out of every group below: it is reserved for EtherCAT.
+# ============================================================
+CPU_BACKGROUND="${CPU_BACKGROUND:-0}"
+CPU_LOCALIZATION="${CPU_LOCALIZATION:-2-4}"
+CPU_CHASSIS="${CPU_CHASSIS:-5}"
+CPU_CONTROLLER="${CPU_CONTROLLER:-6}"
+CPU_PLANNING="${CPU_PLANNING:-7}"
+CPU_NAV_INITIAL="${CPU_NAV_INITIAL:-5-7}"
+
+# The per-node ROS launch prefixes consume these values. Export them so each
+# node starts on its final CPU set and all of its threads inherit that set.
+export CPU_CHASSIS CPU_CONTROLLER CPU_PLANNING
 
 PIDS=()
 PID_NAMES=()
@@ -132,20 +168,147 @@ add_pid()
 
 start_user()
 {
-    local name="$1"
-    local logfile="$2"
-    shift 2
+    local cpus="$1"
+    local name="$2"
+    local logfile="$3"
+    shift 3
 
     echo "[START] ${name}"
     echo "        log: ${logfile}"
+    echo "        CPU: ${cpus}"
 
     # 每个 ros2 launch 的 stdout + stderr 全部进入自己的日志文件。
-    "$@" >"${logfile}" 2>&1 &
+    taskset --cpu-list "${cpus}" "$@" >"${logfile}" 2>&1 &
 
     local pid=$!
     add_pid "${pid}" "${name}"
 
     echo "        pid: ${pid}"
+}
+
+
+check_cpu_affinity()
+{
+    local cpus
+
+    if ! command -v taskset >/dev/null 2>&1; then
+        echo "[ERROR] taskset not found; CPU affinity cannot be applied"
+        exit 1
+    fi
+
+    for cpus in \
+        "${CPU_BACKGROUND}" \
+        "${CPU_LOCALIZATION}" \
+        "${CPU_CHASSIS}" \
+        "${CPU_CONTROLLER}" \
+        "${CPU_PLANNING}" \
+        "${CPU_NAV_INITIAL}"
+    do
+        if ! taskset --cpu-list "${cpus}" true >/dev/null 2>&1; then
+            echo "[ERROR] CPU list '${cpus}' is unavailable or disallowed"
+            exit 1
+        fi
+    done
+
+    # Prevent the bringup shell and its unclassified/background children from
+    # ever running on CPU1. Explicitly grouped children are moved below.
+    if ! taskset --pid --cpu-list "${CPU_BACKGROUND}" "$$" >/dev/null 2>&1; then
+        echo "[ERROR] failed to pin bringup shell to CPU${CPU_BACKGROUND}"
+        exit 1
+    fi
+}
+
+
+wait_can_ready()
+{
+    local timeout_sec="${1:-15}"
+    local i
+    local output
+
+    echo "============================================================"
+    echo "CAN readiness check"
+    echo "interface: ${CAN_IFACE}"
+    echo "expected bitrate: ${CAN_BITRATE}"
+    echo "timeout: ${timeout_sec}s"
+    echo "============================================================"
+
+    for ((i=1; i<=timeout_sec; ++i)); do
+        output="$(ip -details link show "${CAN_IFACE}" 2>&1)"
+
+        echo
+        echo "[CHECK ${i}/${timeout_sec}] CAN ${CAN_IFACE}"
+        echo "${output}"
+
+        if printf '%s\n' "${output}" | grep -qE '<[^>]*UP[^>]*LOWER_UP[^>]*>' &&
+           printf '%s\n' "${output}" | grep -qE 'state[[:space:]]+UP' &&
+           printf '%s\n' "${output}" | grep -qE 'can state[[:space:]]+ERROR-ACTIVE' &&
+           printf '%s\n' "${output}" | grep -qE "bitrate[[:space:]]+${CAN_BITRATE}([[:space:]]|$)"
+        then
+            echo "[OK] CAN ${CAN_IFACE} is UP / LOWER_UP / ERROR-ACTIVE @ ${CAN_BITRATE}"
+            return 0
+        fi
+
+        sleep 1
+    done
+
+    echo "[ERROR] CAN ${CAN_IFACE} did not become healthy"
+    return 1
+}
+
+
+wait_ethercat_master()
+{
+    local timeout_sec="${1:-15}"
+    local i
+    local output
+    local rc
+
+    echo "============================================================"
+    echo "EtherCAT master readiness check"
+    echo "timeout: ${timeout_sec}s"
+    echo "============================================================"
+
+    for ((i=1; i<=timeout_sec; ++i)); do
+        if command -v ethercatctl >/dev/null 2>&1; then
+            output="$(sudo_with_password ethercatctl status 2>&1)"
+            rc=$?
+
+            echo
+            echo "[CHECK ${i}/${timeout_sec}] EtherCAT master"
+            echo "${output}"
+
+            if [ ${rc} -eq 0 ] &&
+               printf '%s\n' "${output}" | grep -qE 'Master[0-9]+[[:space:]]+running'
+            then
+                echo "[OK] EtherCAT master is running"
+                return 0
+            fi
+        elif command -v ethercat >/dev/null 2>&1; then
+            # On systems without ethercatctl, a successful master query proves
+            # that the IgH master device is present and accessible.  The exact
+            # steering-bus health is confirmed immediately afterwards by the
+            # four-slave check.
+            output="$(sudo_with_password ethercat master 2>&1)"
+            rc=$?
+
+            echo
+            echo "[CHECK ${i}/${timeout_sec}] EtherCAT master"
+            echo "${output}"
+
+            if [ ${rc} -eq 0 ] && [ -n "${output}" ]; then
+                echo "[OK] EtherCAT master query succeeded"
+                return 0
+            fi
+        else
+            echo "[ERROR] neither ethercatctl nor ethercat CLI is available"
+            return 1
+        fi
+
+        sleep 1
+    done
+
+    echo "[ERROR] EtherCAT master did not become ready"
+    return 1
 }
 
 
@@ -224,6 +387,7 @@ start_root_taihu()
         LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         RCUTILS_LOGGING_USE_STDOUT=1 \
         RCUTILS_LOGGING_BUFFERED_STREAM=0 \
+        taskset --cpu-list "${CPU_CHASSIS}" \
         bash -c '
             source "/opt/ros/${ROS_DISTRO}/setup.bash"
             source "${FASTLIO_WS}/install/setup.bash"
@@ -305,7 +469,15 @@ echo "ROS_LOCALHOST_ONLY        = ${ROS_LOCALHOST_ONLY}"
 echo "RMW_IMPLEMENTATION        = ${RMW_IMPLEMENTATION:-default}"
 echo "FASTDDS_BUILTIN_TRANSPORTS= ${FASTDDS_BUILTIN_TRANSPORTS}"
 echo "LOG_DIR                   = ${LOG_DIR}"
+echo "CPU0 background           = ${CPU_BACKGROUND}"
+echo "CPU1 EtherCAT RT          = 1 (Taihu parameter)"
+echo "CPU2-4 localization       = ${CPU_LOCALIZATION}"
+echo "CPU5 chassis/safety       = ${CPU_CHASSIS}"
+echo "CPU6 controller/MPPI      = ${CPU_CONTROLLER}"
+echo "CPU7 planner/behavior/BT  = ${CPU_PLANNING}"
 echo "============================================================"
+
+check_cpu_affinity
 
 sudo_with_password -v || echo "[WARN] sudo authentication failed"
 
@@ -357,17 +529,41 @@ echo "      log: ${HARDWARE_LOG}"
     fi
 } >"${HARDWARE_LOG}" 2>&1
 
-# EtherCAT master 启动后，不立即启动 Taihu。
-# 等待总线上恰好出现 4 个转向电机从站，避免 Taihu 在 PDO 尚未注册时启动。
-if wait_taihu_slaves \
-    "${TAIHU_EXPECTED_SLAVES}" \
-    "${TAIHU_SLAVE_WAIT_SEC}" \
-    >>"${HARDWARE_LOG}" 2>&1
+# CAN 必须达到与正常 hardware.log 一致的健康状态：
+#   interface UP + LOWER_UP, state UP, can state ERROR-ACTIVE, bitrate 正确。
+if wait_can_ready "${CAN_READY_WAIT_SEC}" >>"${HARDWARE_LOG}" 2>&1; then
+    CAN_READY=1
+else
+    CAN_READY=0
+fi
+
+# EtherCAT 先确认 master running，再等待总线上恰好出现 4 个泰虎机电从站。
+if wait_ethercat_master "${TAIHU_MASTER_WAIT_SEC}" >>"${HARDWARE_LOG}" 2>&1; then
+    TAIHU_ETHERCAT_MASTER_READY=1
+else
+    TAIHU_ETHERCAT_MASTER_READY=0
+fi
+
+if [ "${TAIHU_ETHERCAT_MASTER_READY}" -eq 1 ] &&
+   wait_taihu_slaves \
+       "${TAIHU_EXPECTED_SLAVES}" \
+       "${TAIHU_SLAVE_WAIT_SEC}" \
+       >>"${HARDWARE_LOG}" 2>&1
 then
     TAIHU_ETHERCAT_READY=1
 else
     TAIHU_ETHERCAT_READY=0
 fi
+
+{
+    echo
+    echo "============================================================"
+    echo "Hardware readiness summary"
+    echo "CAN_READY=${CAN_READY}"
+    echo "TAIHU_ETHERCAT_MASTER_READY=${TAIHU_ETHERCAT_MASTER_READY}"
+    echo "TAIHU_ETHERCAT_READY=${TAIHU_ETHERCAT_READY}"
+    echo "============================================================"
+} >>"${HARDWARE_LOG}" 2>&1
 
 
 # ============================================================
@@ -376,18 +572,29 @@ fi
 
 echo "[2/7] chassis"
 
-start_user \
-    "ZLAC four-wheel driver" \
-    "${LOG_DIR}/zlac.log" \
-    ros2 launch \
-        zlac8015d_four_wheel_driver_cpp \
-        four_wheel_driver.launch.py
+if [ "${CAN_READY}" -eq 1 ]; then
+    start_user \
+        "${CPU_CHASSIS}" \
+        "ZLAC four-wheel driver" \
+        "${LOG_DIR}/zlac.log" \
+        ros2 launch \
+            zlac8015d_four_wheel_driver_cpp \
+            four_wheel_driver.launch.py
+else
+    echo "[SKIP] ZLAC four-wheel driver"
+    echo "       reason: CAN ${CAN_IFACE} is not healthy"
+    {
+        echo "[ERROR] ZLAC driver was not started."
+        echo "CAN interface ${CAN_IFACE} failed the readiness check."
+        echo "See ${HARDWARE_LOG}."
+    } >"${LOG_DIR}/zlac.log"
+fi
 
 if [ "${TAIHU_ETHERCAT_READY}" -eq 1 ]; then
     start_root_taihu
 else
     echo "[SKIP][root] Taihu steer driver"
-    echo "             reason: EtherCAT steering slave count != ${TAIHU_EXPECTED_SLAVES}"
+    echo "             reason: EtherCAT master/slave readiness check failed"
     {
         echo "[ERROR] Taihu driver was not started."
         echo "Expected EtherCAT steering slaves: ${TAIHU_EXPECTED_SLAVES}"
@@ -400,7 +607,12 @@ fi
 # 3. 电机 clear fault / enable
 #
 # 后台执行，不阻塞其它模块启动。
-# 结果全部记录到 motor_enable.log。
+# 不再使用固定 sleep 后只尝试几次：
+#   1) 等待 Trigger service 真正出现；
+#   2) clear fault；
+#   3) enable；
+#   4) 验证实际使能状态；
+#   5) 任一步失败就继续循环，直到验证成功。
 # ============================================================
 
 echo "[3/7] motor enable"
@@ -408,161 +620,243 @@ echo "      log: ${LOG_DIR}/motor_enable.log"
 
 (
     {
+        taskset --pid --cpu-list "${CPU_CHASSIS}" "${BASHPID}" >/dev/null 2>&1 || \
+            echo "[WARN] failed to pin motor-enable helper to CPU${CPU_CHASSIS}"
+
         echo "============================================================"
         echo "Motor enable"
         echo "time: $(date)"
         echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID}"
+        echo "CAN_READY=${CAN_READY}"
+        echo "TAIHU_ETHERCAT_READY=${TAIHU_ETHERCAT_READY}"
         echo "============================================================"
 
-        # ----------------------------------------------------
-        # Trigger service：不仅“尝试调用”，还检查 success=True。
-        # ----------------------------------------------------
-        call_trigger_success()
+        service_is_trigger()
         {
             local service="$1"
-            local attempts="${2:-6}"
-            local timeout_sec="${3:-8}"
-            local i
-            local output
-            local rc
+            local type
 
-            for ((i=1; i<=attempts; ++i)); do
-                echo
-                echo "[CALL ${i}/${attempts}] ${service}"
-                echo "[DDS] DOMAIN=${ROS_DOMAIN_ID} TRANSPORT=${FASTDDS_BUILTIN_TRANSPORTS}"
-
-                output="$(
+            type="$(timeout --signal=INT 4 \
+                env \
                     ROS_DOMAIN_ID="${ROS_DOMAIN_ID}" \
                     ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY}" \
                     FASTDDS_BUILTIN_TRANSPORTS="${FASTDDS_BUILTIN_TRANSPORTS}" \
-                    timeout --signal=INT "${timeout_sec}" \
-                    ros2 service call \
-                        "${service}" \
-                        std_srvs/srv/Trigger "{}" 2>&1
-                )"
+                    ros2 service type "${service}" 2>/dev/null | tail -n 1)"
 
-                rc=$?
+            [ "${type}" = "std_srvs/srv/Trigger" ]
+        }
 
-                echo "${output}"
+        wait_for_trigger_service()
+        {
+            local service="$1"
+            local n=0
 
-                if [ ${rc} -eq 0 ] &&
-                echo "${output}" | grep -q "success=True"
-                then
-                    echo "[SERVICE OK] ${service}: success=True"
+            while true; do
+                if service_is_trigger "${service}"; then
+                    echo "[SERVICE READY] ${service}"
                     return 0
                 fi
 
-                echo "[WARN] ${service}: no success=True, retrying..."
-                sleep 1
+                n=$((n + 1))
+                echo "[WAIT ${n}] ${service} not available yet; waiting..."
+                sleep "${MOTOR_SERVICE_POLL_SEC}"
             done
+        }
 
-            echo "[ERROR] ${service}: service did not report success=True"
+        call_trigger_once()
+        {
+            local service="$1"
+            local timeout_sec="${2:-8}"
+            local output
+            local rc
+
+            echo "[CALL] ${service}"
+            echo "[DDS] DOMAIN=${ROS_DOMAIN_ID} TRANSPORT=${FASTDDS_BUILTIN_TRANSPORTS}"
+
+            output="$(
+                ROS_DOMAIN_ID="${ROS_DOMAIN_ID}" \
+                ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY}" \
+                FASTDDS_BUILTIN_TRANSPORTS="${FASTDDS_BUILTIN_TRANSPORTS}" \
+                timeout --signal=INT "${timeout_sec}" \
+                ros2 service call \
+                    "${service}" \
+                    std_srvs/srv/Trigger "{}" 2>&1
+            )"
+            rc=$?
+
+            echo "${output}"
+
+            if [ ${rc} -eq 0 ] &&
+               printf '%s\n' "${output}" | grep -q 'success=True'
+            then
+                echo "[SERVICE OK] ${service}: success=True"
+                return 0
+            fi
+
+            echo "[SERVICE FAILED] ${service}: rc=${rc}, no success=True"
             return 1
         }
 
-        # ----------------------------------------------------
-        # ZLAC 实际状态确认
-        #
-        # /enable 返回 success=True 后，继续观察 zlac.log。
-        # 驱动内部未使能时会周期性打印：
-        #   drivers are not enabled; call /enable first
-        #
-        # 所以记录 enable 前日志行号，只检查 enable 后新增内容。
-        # ----------------------------------------------------
         verify_zlac_enabled()
         {
             local logfile="${LOG_DIR}/zlac.log"
-            local start_line="$1"
-            local timeout_sec="${2:-5}"
-            local i
+            local verify_sec="${1:-5}"
+            local pattern='drivers are not enabled; call /enable first'
+            local before
+            local after
 
-            for ((i=1; i<=timeout_sec; ++i)); do
-                sleep 1
+            before="$(grep -cF "${pattern}" "${logfile}" 2>/dev/null || true)"
+            before="${before:-0}"
 
-                if tail -n +"${start_line}" "${logfile}" 2>/dev/null |
-                   grep -q "drivers are not enabled; call /enable first"
-                then
-                    echo "[VERIFY] ZLAC still reports NOT enabled (${i}/${timeout_sec}s)"
-                    continue
-                fi
+            echo "[VERIFY] ZLAC: watch ${verify_sec}s for new NOT-enabled warnings (baseline=${before})"
+            sleep "${verify_sec}"
 
-                # 至少等 2 秒，跨过驱动原有约 2 秒一次的 warning 周期，
-                # 再判定没有新的 not-enabled warning。
-                if [ ${i} -ge 3 ]; then
-                    echo "[VERIFY OK] ZLAC no longer reports 'drivers are not enabled'"
-                    return 0
-                fi
-            done
+            after="$(grep -cF "${pattern}" "${logfile}" 2>/dev/null || true)"
+            after="${after:-0}"
 
-            echo "[VERIFY FAILED] ZLAC still not enabled"
+            if [ "${after}" -eq "${before}" ]; then
+                echo "[VERIFY OK] ZLAC enabled: no new NOT-enabled warning (${before} -> ${after})"
+                return 0
+            fi
+
+            echo "[VERIFY FAILED] ZLAC still reports NOT enabled (${before} -> ${after})"
             return 1
         }
 
-        # ----------------------------------------------------
-        # Taihu 实际状态确认
-        #
-        # /steer/enable 的 Trigger response 是 "enable requested"，
-        # 只表示请求被接受。
-        # 真正的硬件状态以 EtherCAT 周期日志：
-        #   enabled=[1, 1, 1, 1]
-        # 为准。
-        # ----------------------------------------------------
         verify_taihu_enabled()
         {
             local logfile="${LOG_DIR}/taihu.log"
-            local timeout_sec="${1:-8}"
+            local timeout_sec="${1:-10}"
             local i
+            local last_state
 
             for ((i=1; i<=timeout_sec; ++i)); do
-                if tail -n 80 "${logfile}" 2>/dev/null |
-                   grep -q "enabled=\[1, 1, 1, 1\]"
-                then
-                    echo "[VERIFY OK] Taihu enabled=[1, 1, 1, 1]"
+                last_state="$(
+                    grep -oE 'enabled=\[[01], [01], [01], [01]\]' "${logfile}" 2>/dev/null |
+                    tail -n 1
+                )"
+
+                if [ "${last_state}" = "enabled=[1, 1, 1, 1]" ]; then
+                    echo "[VERIFY OK] Taihu ${last_state}"
                     return 0
                 fi
 
-                echo "[VERIFY] waiting Taihu actual enable (${i}/${timeout_sec}s)"
+                echo "[VERIFY ${i}/${timeout_sec}] Taihu latest state: ${last_state:-not reported yet}"
                 sleep 1
             done
 
-            echo "[VERIFY FAILED] Taihu did not reach enabled=[1, 1, 1, 1]"
+            echo "[VERIFY FAILED] Taihu latest state did not reach enabled=[1, 1, 1, 1]"
             return 1
         }
 
-        # ZLAC 启动较快，先处理驱动轮。
-        sleep 2
+        enable_zlac_until_success()
+        {
+            local round=0
 
-        call_trigger_success \
-            /wheel_control_can/clear_fault 6 3 || true
+            wait_for_trigger_service /wheel_control_can/clear_fault
+            wait_for_trigger_service /wheel_control_can/enable
 
-        zlac_log_start=$(( $(wc -l < "${LOG_DIR}/zlac.log" 2>/dev/null || echo 0) + 1 ))
+            while true; do
+                round=$((round + 1))
+                echo
+                echo "============================================================"
+                echo "[ZLAC ENABLE ROUND ${round}]"
+                echo "============================================================"
 
-        if call_trigger_success \
-            /wheel_control_can/enable 6 3
-        then
-            verify_zlac_enabled "${zlac_log_start}" 5 || true
+                # Services can disappear when the driver is restarted.  Re-check
+                # them on every round instead of assuming they stay alive.
+                wait_for_trigger_service /wheel_control_can/clear_fault
+                wait_for_trigger_service /wheel_control_can/enable
+
+                if ! call_trigger_once /wheel_control_can/clear_fault 5; then
+                    echo "[ZLAC] clear_fault failed; retry in ${MOTOR_ENABLE_RETRY_SEC}s"
+                    sleep "${MOTOR_ENABLE_RETRY_SEC}"
+                    continue
+                fi
+
+                if ! call_trigger_once /wheel_control_can/enable 5; then
+                    echo "[ZLAC] enable request failed; retry in ${MOTOR_ENABLE_RETRY_SEC}s"
+                    sleep "${MOTOR_ENABLE_RETRY_SEC}"
+                    continue
+                fi
+
+                if verify_zlac_enabled "${ZLAC_ENABLE_VERIFY_SEC}"; then
+                    echo "[MOTOR READY] ZLAC drive motors are enabled"
+                    return 0
+                fi
+
+                echo "[ZLAC] enable was not confirmed; clear fault + enable again in ${MOTOR_ENABLE_RETRY_SEC}s"
+                sleep "${MOTOR_ENABLE_RETRY_SEC}"
+            done
+        }
+
+        enable_taihu_until_success()
+        {
+            local round=0
+
+            wait_for_trigger_service /steer/reset_fault
+            wait_for_trigger_service /steer/enable
+
+            while true; do
+                round=$((round + 1))
+                echo
+                echo "============================================================"
+                echo "[TAIHU ENABLE ROUND ${round}]"
+                echo "============================================================"
+
+                wait_for_trigger_service /steer/reset_fault
+                wait_for_trigger_service /steer/enable
+
+                if ! call_trigger_once /steer/reset_fault 8; then
+                    echo "[TAIHU] reset_fault failed; retry in ${MOTOR_ENABLE_RETRY_SEC}s"
+                    sleep "${MOTOR_ENABLE_RETRY_SEC}"
+                    continue
+                fi
+
+                if ! call_trigger_once /steer/enable 8; then
+                    echo "[TAIHU] enable request failed; retry in ${MOTOR_ENABLE_RETRY_SEC}s"
+                    sleep "${MOTOR_ENABLE_RETRY_SEC}"
+                    continue
+                fi
+
+                if verify_taihu_enabled "${TAIHU_ENABLE_VERIFY_SEC}"; then
+                    echo "[MOTOR READY] Taihu steering motors are enabled"
+                    return 0
+                fi
+
+                echo "[TAIHU] enable was not confirmed; reset fault + enable again in ${MOTOR_ENABLE_RETRY_SEC}s"
+                sleep "${MOTOR_ENABLE_RETRY_SEC}"
+            done
+        }
+
+        # 两套电机分别处理。硬件接口不正常时不向对应总线下发电机命令。
+        # 这里本身运行在后台，因此等待 service / 重试使能不会卡住 Livox、
+        # FAST-LIO、Nav2 等后续模块的启动。
+        if [ "${CAN_READY}" -eq 1 ]; then
+            enable_zlac_until_success &
+            ZLAC_ENABLE_PID=$!
         else
-            echo "[VERIFY SKIP] ZLAC enable service never returned success=True"
+            echo "[SKIP] ZLAC enable: CAN ${CAN_IFACE} is not healthy; see ${HARDWARE_LOG}"
+            ZLAC_ENABLE_PID=""
         fi
 
-        # Taihu 只有在 EtherCAT 检测到恰好 4 个转向电机从站时才会启动。
         if [ "${TAIHU_ETHERCAT_READY}" -eq 1 ]; then
-            # Taihu 启动后还会依次读取 4 个 EtherCAT 从站的 PP 参数。
-            sleep 6
-
-            call_trigger_success \
-                /steer/reset_fault 6 8 || true
-
-            if call_trigger_success \
-                /steer/enable 6 8
-            then
-                verify_taihu_enabled 8 || true
-            else
-                echo "[VERIFY SKIP] Taihu enable service never returned success=True"
-            fi
+            enable_taihu_until_success &
+            TAIHU_ENABLE_PID=$!
         else
-            echo "[VERIFY SKIP] Taihu EtherCAT slave count check failed; Taihu was not started"
+            echo "[SKIP] Taihu enable: EtherCAT is not healthy; see ${HARDWARE_LOG}"
+            TAIHU_ENABLE_PID=""
         fi
+
+        # Keep this logging subshell alive until both enable workers finish.
+        # In the normal case they exit only after positive verification.
+        [ -n "${ZLAC_ENABLE_PID}" ] && wait "${ZLAC_ENABLE_PID}"
+        [ -n "${TAIHU_ENABLE_PID}" ] && wait "${TAIHU_ENABLE_PID}"
+
+        echo
+        echo "============================================================"
+        echo "Motor enable complete"
+        echo "============================================================"
 
     } >"${LOG_DIR}/motor_enable.log" 2>&1
 ) &
@@ -575,6 +869,7 @@ echo "      log: ${LOG_DIR}/motor_enable.log"
 echo "[4/7] Livox"
 
 start_user \
+    "${CPU_LOCALIZATION}" \
     "Livox MID360" \
     "${LOG_DIR}/livox.log" \
     ros2 launch \
@@ -589,6 +884,7 @@ start_user \
 echo "[5/7] FAST-LIO + Open3D"
 
 start_user \
+    "${CPU_LOCALIZATION}" \
     "FAST-LIO / Open3D" \
     "${LOG_DIR}/localization.log" \
     ros2 launch \
@@ -596,6 +892,7 @@ start_user \
         localization_3d_g1.launch.py
 
 start_user \
+    "${CPU_BACKGROUND}" \
     "System Manager" \
     "${LOG_DIR}/system_manager.log" \
     ros2 launch \
@@ -609,28 +906,29 @@ start_user \
 
 echo "[6/7] g1_nav2"
 
+start_user \
+    "${CPU_NAV_INITIAL}" \
+    "G1 Swerve Nav2" \
+    "${LOG_DIR}/g1_swerve_nav.log" \
+    ros2 launch \
+        g1_swerve_nav \
+        bringup.launch.py
+
+
+
 # start_user \
-#     "G1 Swerve Nav2" \
-#     "${LOG_DIR}/g1_swerve_nav.log" \
+#     "ackermann" \
+#     "${LOG_DIR}/ackermann.log" \
 #     ros2 launch \
-#         g1_swerve_nav \
-#         bringup.launch.py
+#         ackermann_steering_controller \
+#         ackermann_standalone.launch.py
 
-
-
-start_user \
-    "ackermann" \
-    "${LOG_DIR}/ackermann.log" \
-    ros2 launch \
-        ackermann_steering_controller \
-        ackermann_standalone.launch.py
-
-start_user \
-    "Nav2" \
-    "${LOG_DIR}/nav2.log" \
-    ros2 launch \
-        nav2 \
-        swerve_navigation2_gazebo.launch.py
+# start_user \
+#     "Nav2" \
+#     "${LOG_DIR}/nav2.log" \
+#     ros2 launch \
+#         nav2 \
+#         swerve_navigation2_gazebo.launch.py
 
 
 # ============================================================
@@ -640,6 +938,7 @@ start_user \
 echo "[7/7] merman_robot"
 
 start_user \
+    "${CPU_BACKGROUND}" \
     "Merman Robot" \
     "${LOG_DIR}/merman_robot.log" \
     "${MERMAN_ROBOT}"

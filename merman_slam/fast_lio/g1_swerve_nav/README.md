@@ -92,7 +92,7 @@ Teleop (/cmd_vel or /cmd_vel_teleop) --------/        |
                      /steer/position_cmd     /wheel_control_can/wheel_rpm_cmd
 ```
 
-Fast-LIO / localization remains external and must provide `/odom` and TF. The 2D map remains external and must provide `/map`.
+Fast-LIO / localization remains external and must provide `/Odometry_loc` and TF. The 2D map remains external and must provide `/map`.
 
 ## Kinematics
 
@@ -148,6 +148,7 @@ Default stable planner/controller:
 - Global planner: `nav2_smac_planner/SmacPlanner2D`
 - Local controller: `nav2_mppi_controller::MPPIController`
 - Motion model: `Omni`
+- Reverse body motion: disabled (`vx_min: 0.0`) because rear obstacle sensing is unavailable
 - Velocity smoothing: enabled on X/Y/Yaw
 - Collision monitor: full-body stop + slowdown zones around the entire robot
 - Goal checker: `0.04 m` XY and `0.035 rad` yaw initial target
@@ -160,8 +161,8 @@ Before Nav2 starts, these must exist:
 
 ```text
 /map
-/odom
-/scan
+/Odometry_loc
+/nav2_scan
 TF map -> odom
 TF odom -> base_link
 /steer/joint_states

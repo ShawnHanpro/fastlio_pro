@@ -8,35 +8,52 @@ collision_monitor:
     cmd_vel_out_topic: /cmd_vel_safe
     transform_tolerance: 0.20
     source_timeout: 0.30
-    base_shift_correction: true
+    # FAST-LIO publishes odom -> base_link at the 10 Hz LiDAR update rate.
+    # Use the fixed sensor-to-base transform here to avoid future-TF extrapolation.
+    base_shift_correction: false
     stop_pub_timeout: 1.0
 
-    # Omni robot: protect the full body in every travel direction, not just the
-    # front. Polygon sizes are derived from the currently configured 0.8x0.5 m
-    # footprint plus margins and should be rechecked after measuring the body.
-    polygons: [StopZone, SlowZone]
+    # Asymmetric omni footprint: front 0.58 m, rear 0.40 m, half-width 0.30 m.
+    # StopZone keeps about 0.20 m beyond the padded footprint as an initial
+    # emergency braking margin for 0.50/0.50 m/s translation and 0.60 rad/s yaw.
+    # Final dimensions and TTC must be verified by maximum-speed braking tests.
+    polygons: [StopZone, SlowZone, Approach]
 
     StopZone:
       type: polygon
-      points: [0.50, 0.35, 0.50, -0.35, -0.50, -0.35, -0.50, 0.35]
+      points: [0.80, 0.47, 0.80, -0.47, -0.62, -0.47, -0.62, 0.47]
       action_type: stop
-      max_points: 3
+      # Humble triggers when points_inside > max_points: 1 means at least 2 points.
+      max_points: 1
       visualize: true
       polygon_pub_topic: collision_stop_zone
       enabled: true
 
     SlowZone:
       type: polygon
-      points: [0.75, 0.60, 0.75, -0.60, -0.75, -0.60, -0.75, 0.60]
+      points: [1.20, 0.85, 1.20, -0.85, -0.90, -0.85, -0.90, 0.85]
       action_type: slowdown
-      max_points: 3
+      # Require at least 3 points before applying the fixed slowdown.
+      max_points: 2
       slowdown_ratio: 0.35
       visualize: true
       polygon_pub_topic: collision_slow_zone
       enabled: true
 
+    Approach:
+      type: polygon
+      action_type: approach
+      # Dynamically use the same padded footprint as the local controller.
+      footprint_topic: /local_costmap/published_footprint
+      time_before_collision: 1.0
+      simulation_time_step: 0.05
+      max_points: 1
+      visualize: true
+      polygon_pub_topic: collision_approach_footprint
+      enabled: true
+
     observation_sources: [scan]
     scan:
       type: scan
-      topic: /scan
+      topic: /nav2_scan
       enabled: true

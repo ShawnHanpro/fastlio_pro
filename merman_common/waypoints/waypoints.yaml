@@ -1,31 +1,21 @@
 points:
 - id: 1
   type: task
-  x: -1.017
-  y: 1.2256
-  theta: 1.2332
+  x: 4.0711
+  y: -0.1227
+  theta: 1.3431
 - id: 2
   type: task
-  x: -0.426
-  y: 2.8853
-  theta: 1.2209
+  x: 4.6462
+  y: 2.1017
+  theta: 1.3253
 - id: 3
-  type: via
-  x: -0.3981
-  y: 2.8655
-  theta: -0.4234
+  type: task
+  x: 2.8357
+  y: 1.9201
+  theta: -3.0596
 - id: 4
   type: task
-  x: 0.4209
-  y: 2.5017
-  theta: -0.4218
-- id: 5
-  type: via
-  x: 0.4108
-  y: 2.4714
-  theta: -1.9693
-- id: 6
-  type: task
-  x: -0.3309
-  y: 0.8545
-  theta: 1.2517
+  x: 1.1961
+  y: -0.3376
+  theta: -0.0735

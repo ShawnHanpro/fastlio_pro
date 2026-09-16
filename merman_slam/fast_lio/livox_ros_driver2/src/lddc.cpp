@@ -31,6 +31,7 @@
 #include <inttypes.h>
 #include <iostream>
 #include <iomanip>
+#include <limits>
 #include <math.h>
 #include <stdint.h>
 
@@ -115,6 +116,20 @@ int Lddc::RegisterLds(Lds *lds) {
   } else {
     return -1;
   }
+}
+
+void Lddc::SetRosNode(livox_ros::DriverNode *node) {
+  cur_node_ = node;
+#ifdef BUILDING_ROS2
+  // The deployed MID360S launch uses Livox CustomMsg output. Publish the
+  // navigation scan from the same in-memory message, without a second ROS
+  // subscription/copy or any dependency on FAST-LIO's mapping loop.
+  if (transfer_format_ == kLivoxCustomMsg && output_type_ == kOutputToRos) {
+    nav2_scan_pub_ = cur_node_->create_publisher<LaserScan>("/nav2_scan", 10);
+    DRIVER_INFO(*cur_node_,
+        "/nav2_scan is generated directly from the Livox CustomMsg stream");
+  }
+#endif
 }
 
 void Lddc::DistributePointCloudData(void) {
@@ -555,6 +570,9 @@ void Lddc::PublishCustomPointData(const CustomMsg& livox_msg, const uint8_t inde
 
   if (kOutputToRos == output_type_) {
     publisher_ptr->publish(livox_msg);
+#ifdef BUILDING_ROS2
+    PublishLivoxScan(livox_msg);
+#endif
   } else {
 #ifdef BUILDING_ROS1
     if (bag_ && enable_lidar_bag_) {
@@ -563,6 +581,63 @@ void Lddc::PublishCustomPointData(const CustomMsg& livox_msg, const uint8_t inde
 #endif
   }
 }
+
+#ifdef BUILDING_ROS2
+void Lddc::PublishLivoxScan(const CustomMsg& livox_msg) {
+  if (!nav2_scan_pub_) {
+    return;
+  }
+
+  LaserScan scan;
+  scan.header.stamp = livox_msg.header.stamp;
+  scan.header.frame_id = "imu_link";
+  scan.angle_min = -M_PI;
+  scan.angle_max = M_PI;
+  const int beam_num = 720;
+  scan.angle_increment =
+      (scan.angle_max - scan.angle_min) / static_cast<float>(beam_num);
+  scan.range_min = 0.1;
+  scan.range_max = 30.0;
+  scan.ranges.assign(beam_num, std::numeric_limits<float>::infinity());
+
+  for (const auto &p : livox_msg.points) {
+    if (p.line != 2 && p.line != 3) {
+      continue;
+    }
+
+    // Fixed LiDAR -> IMU extrinsic copied from FAST_LIO/config/mid360.yaml.
+    // extrinsic_est_en is false there, so R is identity and T is fixed.
+    const float x = p.x - 0.011F;
+    const float y = p.y - 0.02329F;
+    const float z = p.z + 0.04412F;
+
+    // Remove points outside the navigation height band, and remove self
+    // reflections only when the point lies inside the complete body box in
+    // the IMU frame. Using AND between the X/Y intervals avoids creating
+    // cross-shaped blind strips in front, behind, and beside the robot.
+    if (z < -0.3F || z > 1.5F ||
+        ((x < 0.38F && x > -0.70F) &&
+         (y < 0.16F && y > -0.55F))) {
+      continue;
+    }
+
+    const float range = std::sqrt(x * x + y * y);
+    if (range < scan.range_min || range > scan.range_max) {
+      continue;
+    }
+
+    const float angle = std::atan2(y, x);
+    const int scan_index = static_cast<int>(
+        (angle - scan.angle_min) / scan.angle_increment);
+    if (scan_index >= 0 && scan_index < beam_num &&
+        range < scan.ranges[scan_index]) {
+      scan.ranges[scan_index] = range;
+    }
+  }
+
+  nav2_scan_pub_->publish(scan);
+}
+#endif
 
 void Lddc::InitPclMsg(const StoragePacket& pkg, PointCloud& cloud, uint64_t& timestamp) {
 #ifdef BUILDING_ROS1

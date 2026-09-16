@@ -46,7 +46,8 @@
       scan_publish_en: true # false: close all the point cloud output
       dense_publish_en: false # false: low down the points number in a global-frame point clouds scan.
       scan_bodyframe_pub_en: false # true: output the point cloud scans in IMU-body-frame
-      livox_scan_pub_en: true
+      # /nav2_scan is published directly inside livox_ros_driver2,
+      # independently of the FAST-LIO mapping loop.
 
     pcd_save:
       pcd_save_en: true

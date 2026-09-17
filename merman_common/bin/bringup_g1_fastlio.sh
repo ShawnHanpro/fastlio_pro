@@ -115,13 +115,38 @@ PID_NAMES=()
 LOG_ROOT="${MERMAN_COMMON}/logs"
 RUN_ID="$(date '+%Y%m%d_%H%M%S')"
 LOG_DIR="${LOG_ROOT}/${RUN_ID}"
+LATEST_LINK="${LOG_ROOT}/latest"
 
-mkdir -p "${LOG_DIR}"
 mkdir -p "${LOG_ROOT}"
+mkdir -p "${LOG_DIR}"
 
-# logs/latest 永远指向最近一次启动
-ln -sfn "${LOG_DIR}" "${LOG_ROOT}/latest"
+# latest 必须是软链接，不能是普通目录
+if [ -e "${LATEST_LINK}" ] && [ ! -L "${LATEST_LINK}" ]; then
+    LEGACY_LATEST="${LOG_ROOT}/latest_legacy_$(date '+%Y%m%d_%H%M%S')"
 
+    echo "[WARN] ${LATEST_LINK} is a real directory"
+    echo "[WARN] move old latest -> ${LEGACY_LATEST}"
+
+    mv "${LATEST_LINK}" "${LEGACY_LATEST}"
+fi
+
+# -T 防止 latest 是目录时把链接创建到目录里面
+ln -sfnT "${LOG_DIR}" "${LATEST_LINK}"
+
+echo "[LOG] current run: ${LOG_DIR}"
+echo "[LOG] latest -> $(readlink -f "${LATEST_LINK}")"
+
+BRINGUP_LOG="${LOG_DIR}/bringup.log"
+
+{
+    echo "============================================================"
+    echo "Merman G1 bringup"
+    echo "time: $(date '+%F %T.%N')"
+    echo "pid: $$"
+    echo "ppid: ${PPID}"
+    echo "log_dir: ${LOG_DIR}"
+    echo "============================================================"
+} >>"${BRINGUP_LOG}"
 
 # ============================================================
 # ROS 环境
@@ -429,33 +454,105 @@ start_root_taihu()
 
 cleanup()
 {
+    local reason="${1:-UNKNOWN}"
+
+    {
+        echo
+        echo "============================================================"
+        echo "[STOP] stopping G1 bringup"
+        echo "[STOP] reason=${reason}"
+        echo "[STOP] time=$(date '+%F %T.%N')"
+        echo "[STOP] pid=$$"
+        echo "[STOP] ppid=$PPID"
+        echo "============================================================"
+    } >>"${BRINGUP_LOG}" 2>&1
+
     echo
     echo "[STOP] stopping G1 bringup..."
+    echo "[STOP] reason=${reason}"
 
-    for pid in "${PIDS[@]}"; do
-        kill -INT "${pid}" 2>/dev/null || true
+    for i in "${!PIDS[@]}"; do
+        pid="${PIDS[$i]}"
+        name="${PID_NAMES[$i]}"
+
+        if kill -0 "${pid}" 2>/dev/null; then
+            echo "[STOP] SIGINT -> ${name}, pid=${pid}" \
+                >>"${BRINGUP_LOG}"
+
+            kill -INT "${pid}" 2>/dev/null || true
+        else
+            echo "[STOP] already dead: ${name}, pid=${pid}" \
+                >>"${BRINGUP_LOG}"
+        fi
     done
 
     # root Taihu
-    sudo_with_password pkill -INT -f "taihu_steer_driver_node" 2>/dev/null || true
+    echo "[STOP] Taihu driver" >>"${BRINGUP_LOG}"
+
+    sudo_with_password pkill -INT -f \
+        "taihu_steer_driver_node" \
+        2>/dev/null || true
+
     sudo_with_password pkill -INT -f \
         "ros2 launch taihu_steer_driver taihu_steer_driver.launch.py" \
         2>/dev/null || true
 
     # EtherCAT
     if command -v ethercatctl >/dev/null 2>&1; then
-        sudo_with_password ethercatctl stop >>"${LOG_DIR}/hardware.log" 2>&1 || true
+        echo "[STOP] EtherCAT master" >>"${BRINGUP_LOG}"
+
+        sudo_with_password ethercatctl stop \
+            >>"${LOG_DIR}/hardware.log" 2>&1 || true
+
     elif command -v ethercat >/dev/null 2>&1; then
-        sudo_with_password ethercat stop >>"${LOG_DIR}/hardware.log" 2>&1 || true
+        echo "[STOP] EtherCAT master" >>"${BRINGUP_LOG}"
+
+        sudo_with_password ethercat stop \
+            >>"${LOG_DIR}/hardware.log" 2>&1 || true
     fi
+
+    {
+        echo "[STOP] cleanup finished"
+        echo "[STOP] log=${LOG_DIR}"
+        echo "============================================================"
+    } >>"${BRINGUP_LOG}"
 
     echo "[STOP] done"
     echo "[LOG] ${LOG_DIR}"
+
     exit 0
 }
 
-trap cleanup INT TERM
 
+on_sigint()
+{
+    echo "[SIGNAL] SIGINT received time=$(date '+%F %T.%N') pid=$$ ppid=$PPID" \
+        >>"${BRINGUP_LOG}"
+
+    cleanup "SIGINT"
+}
+
+
+on_sigterm()
+{
+    echo "[SIGNAL] SIGTERM received time=$(date '+%F %T.%N') pid=$$ ppid=$PPID" \
+        >>"${BRINGUP_LOG}"
+
+    cleanup "SIGTERM"
+}
+
+
+on_sighup()
+{
+    # 暂时只记录 SIGHUP，不停止整个机器人
+    echo "[SIGNAL] SIGHUP received and ignored time=$(date '+%F %T.%N') pid=$$ ppid=$PPID" \
+        >>"${BRINGUP_LOG}"
+}
+
+
+trap on_sigint INT
+trap on_sigterm TERM
+trap on_sighup HUP
 
 # ============================================================
 # 启动摘要

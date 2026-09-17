@@ -1015,31 +1015,45 @@ void Ros2Channel::HandleStopTask(
     RCLCPP_INFO(node_->get_logger(), "收到 stop_task，任务已停止");
 }
 
-void Ros2Channel::PauseTaskCallback(const std_msgs::msg::Bool::SharedPtr msg) {
+void Ros2Channel::PauseTaskCallback(
+    const std_msgs::msg::Bool::SharedPtr msg) {
     if (!msg) {
         return;
     }
 
-    const bool pause_task = msg->data;
+    // 上层协议：
+    // false = 暂停
+    // true  = 恢复
+    const bool resume_task = msg->data;
 
-    RCLCPP_INFO(node_->get_logger(), "收到 %s 消息: pause_task=%s",
+    RCLCPP_INFO(node_->get_logger(),
+                "收到 %s 消息: pause_task=%s",
                 config_.sub_pause_task_topic.c_str(),
-                pause_task ? "true" : "false");
+                resume_task ? "true" : "false");
 
     if (!communication_.get_task_running()) {
         RCLCPP_WARN(node_->get_logger(),
                     "当前没有正在执行的导航任务，忽略 pause_task=%s",
-                    pause_task ? "true" : "false");
+                    resume_task ? "true" : "false");
         return;
     }
 
-    if (pause_task) {
-        RCLCPP_INFO(node_->get_logger(), "暂停当前任务");
-    } else {
+    if (resume_task) {
+        // true = 恢复
         RCLCPP_INFO(node_->get_logger(), "恢复当前任务");
+    } else {
+        // false = 暂停
+        RCLCPP_INFO(node_->get_logger(), "暂停当前任务");
     }
 
-    communication_.PauseTask(pause_task);
+    /*
+     * communication_.PauseTask() 原有内部语义：
+     * true  = 暂停
+     * false = 恢复
+     *
+     * 因此外部协议需要取反。
+     */
+    communication_.PauseTask(!resume_task);
 }
 
 bool Ros2Channel::set_waypoints(

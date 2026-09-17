@@ -20,7 +20,7 @@ communication:
     sub_pose_topic: "/localization_3d"
     sub_cmd_vel_topic: "/cmd_vel"
     sub_audio_done_topic: "/audio_done"
-    sub_pause_task_topic: "/pause_task"
+    sub_pause_task_topic: "/btn/tour"
 
     start_task_service: "/start_task"
     stop_task_service: "/stop_task"

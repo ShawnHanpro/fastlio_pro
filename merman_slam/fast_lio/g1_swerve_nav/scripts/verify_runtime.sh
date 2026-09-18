@@ -28,9 +28,18 @@ check_topic /Odometry_loc nav_msgs/msg/Odometry
 check_topic /nav2_scan sensor_msgs/msg/LaserScan
 check_topic /steer/joint_states sensor_msgs/msg/JointState
 check_topic /wheel_control_can/state zlac8015d_four_wheel_driver_cpp/msg/FourWheelState
+check_topic /cmd_vel_nav geometry_msgs/msg/Twist
+check_topic /cmd_vel_behavior geometry_msgs/msg/Twist
+check_topic /cmd_vel_selected geometry_msgs/msg/Twist
+check_topic /cmd_vel_smoothed geometry_msgs/msg/Twist
+check_topic /cmd_vel_safe geometry_msgs/msg/Twist
+check_topic /cmd_vel_mux/mode std_msgs/msg/String
+check_topic /cmd_vel geometry_msgs/msg/Twist
 
-printf '\nExpected command outputs after bringup:\n'
-printf '  /cmd_vel_nav -> /cmd_vel_selected -> /cmd_vel_smoothed -> /cmd_vel_safe\n'
+printf '\nExpected command paths with g1_swerve_nav and teleop_sbus running:\n'
+printf '  NAVIGATION: /cmd_vel_nav + /cmd_vel_behavior -> /cmd_vel_selected\n'
+printf '              -> /cmd_vel_smoothed -> /cmd_vel_safe -> mode mux -> /cmd_vel\n'
+printf '  MANUAL:     /cmd_vel_joy -> mode mux -> /cmd_vel (bypasses collision_monitor)\n'
 printf '  /steer/position_cmd\n'
 printf '  /wheel_control_can/wheel_rpm_cmd\n'
 printf '\nSummary: %d present, %d missing\n' "$ok" "$bad"

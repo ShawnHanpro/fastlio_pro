@@ -106,15 +106,12 @@ cmd_vel_arbiter:
   ros__parameters:
     nav_topic: /cmd_vel_nav
     behavior_topic: /cmd_vel_behavior
-    # Standard teleop_twist_keyboard works without remapping.
-    teleop_topic: /cmd_vel
-    # Keep the explicit teleop topic as a second compatible input.
-    teleop_alias_topic: /cmd_vel_teleop
     output_topic: /cmd_vel_selected
     nav_timeout: 0.35
     behavior_timeout: 0.40
-    teleop_timeout: 0.80
+    mode_topic: /cmd_vel_mux/mode
     # NAV->NONE can happen briefly during recovery. Recenter only if NONE
-    # remains stable for this long; any resumed source cancels the pending action.
+    # remains stable for this long in NAVIGATION mode. Any resumed source or
+    # transition to MANUAL/NONE cancels the pending action.
     nav_recenter_delay_sec: 1.50
     publish_frequency: 50.0

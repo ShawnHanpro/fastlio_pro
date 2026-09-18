@@ -8,17 +8,20 @@ find_package(Qt5 REQUIRED COMPONENTS Widgets)
 find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
 add_executable(merman_chassis_panel
     src/main.cpp
     src/chassis_panel.cpp
+    src/map_widget.cpp
 )
 
 target_include_directories(merman_chassis_panel PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${geometry_msgs_INCLUDE_DIRS}
     ${nav_msgs_INCLUDE_DIRS}
+    ${sensor_msgs_INCLUDE_DIRS}
     ${std_srvs_INCLUDE_DIRS}
 )
 
@@ -27,6 +30,7 @@ target_link_libraries(merman_chassis_panel PRIVATE
     rclcpp::rclcpp
     ${geometry_msgs_LIBRARIES}
     ${nav_msgs_LIBRARIES}
+    ${sensor_msgs_LIBRARIES}
     ${std_srvs_LIBRARIES}
 )
 

@@ -50,7 +50,9 @@ waypoint_follower:
     waypoint_task_executor_plugin: wait_at_waypoint
     wait_at_waypoint:
       plugin: nav2_waypoint_follower::WaitAtWaypoint
-      enabled: true
+      # TaskManager owns arrival notification and audio sequencing; do not add
+      # a fixed Nav2 dwell before returning the FollowWaypoints result.
+      enabled: false
       waypoint_pause_duration: 0
 
 controller_server:
@@ -159,7 +161,6 @@ controller_server:
         # Begin blending final yaw while still translating rather than waiting
         # for a separate rotate-in-place stage.
         threshold_to_consider: 1.5
-        symmetric_yaw_tolerance: false
 
       PathAlignCritic:
         enabled: true

@@ -616,8 +616,8 @@ void Lddc::PublishLivoxScan(const CustomMsg& livox_msg) {
     // the IMU frame. Using AND between the X/Y intervals avoids creating
     // cross-shaped blind strips in front, behind, and beside the robot.
     if (z < -0.3F || z > 1.5F ||
-        ((x < 0.38F && x > -0.70F) &&
-         (y < 0.16F && y > -0.55F))) {
+        ((x < 0.43F && x > -0.70F) &&
+         (y < 0.16F && y > -0.60F))) {
       continue;
     }
 

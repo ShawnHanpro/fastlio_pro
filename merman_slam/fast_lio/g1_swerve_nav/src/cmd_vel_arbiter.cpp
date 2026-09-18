@@ -7,9 +7,8 @@
 
 #include "geometry_msgs/msg/twist.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
-
-using std::placeholders::_1;
 
 namespace g1_swerve_nav
 {
@@ -22,14 +21,10 @@ public:
   {
     nav_topic_ = declare_parameter<std::string>("nav_topic", "/cmd_vel_nav");
     behavior_topic_ = declare_parameter<std::string>("behavior_topic", "/cmd_vel_behavior");
-    // teleop_twist_keyboard publishes /cmd_vel by default. Keep /cmd_vel_teleop
-    // as an alias so both the standard command and the explicit remap work.
-    teleop_topic_ = declare_parameter<std::string>("teleop_topic", "/cmd_vel");
-    teleop_alias_topic_ = declare_parameter<std::string>("teleop_alias_topic", "/cmd_vel_teleop");
     output_topic_ = declare_parameter<std::string>("output_topic", "/cmd_vel_selected");
+    mode_topic_ = declare_parameter<std::string>("mode_topic", "/cmd_vel_mux/mode");
     nav_timeout_ = declare_parameter<double>("nav_timeout", 0.35);
     behavior_timeout_ = declare_parameter<double>("behavior_timeout", 0.40);
-    teleop_timeout_ = declare_parameter<double>("teleop_timeout", 0.80);
     nav_recenter_delay_sec_ = declare_parameter<double>("nav_recenter_delay_sec", 1.50);
     publish_frequency_ = declare_parameter<double>("publish_frequency", 50.0);
 
@@ -39,12 +34,13 @@ public:
     behavior_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       behavior_topic_, rclcpp::QoS(10),
       [this](geometry_msgs::msg::Twist::SharedPtr msg) {store_behavior(*msg);});
-    teleop_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      teleop_topic_, rclcpp::QoS(10),
-      [this](geometry_msgs::msg::Twist::SharedPtr msg) {store_teleop(*msg);});
-    teleop_alias_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-      teleop_alias_topic_, rclcpp::QoS(10),
-      [this](geometry_msgs::msg::Twist::SharedPtr msg) {store_teleop(*msg);});
+
+    auto mode_qos = rclcpp::QoS(rclcpp::KeepLast(1));
+    mode_qos.reliable().transient_local();
+    mode_sub_ = create_subscription<std_msgs::msg::String>(
+      mode_topic_, mode_qos,
+      [this](std_msgs::msg::String::SharedPtr msg) {store_mode(*msg);});
+
     pub_ = create_publisher<geometry_msgs::msg::Twist>(output_topic_, 10);
 
     recenter_client_ = create_client<std_srvs::srv::Trigger>(
@@ -57,12 +53,15 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "cmd_vel arbiter: teleop(%s,%s) > behavior(%s) > nav(%s) -> %s",
-      teleop_topic_.c_str(), teleop_alias_topic_.c_str(), behavior_topic_.c_str(),
-      nav_topic_.c_str(), output_topic_.c_str());
+      "autonomous cmd_vel arbiter: behavior(%s) > nav(%s) -> %s, mode=%s",
+      behavior_topic_.c_str(), nav_topic_.c_str(), output_topic_.c_str(),
+      mode_topic_.c_str());
   }
 
 private:
+  enum class Source { NONE, NAV, BEHAVIOR };
+  enum class DriveMode { NONE, MANUAL, NAVIGATION };
+
   static bool valid(const geometry_msgs::msg::Twist & msg)
   {
     return std::isfinite(msg.linear.x) && std::isfinite(msg.linear.y) &&
@@ -93,117 +92,94 @@ private:
     have_behavior_ = true;
   }
 
-  void store_teleop(const geometry_msgs::msg::Twist & msg)
+  void store_mode(const std_msgs::msg::String & msg)
   {
-    if (!valid(msg)) {
-      RCLCPP_WARN_THROTTLE(
-        get_logger(), *get_clock(), 1000,
-        "Rejected NaN/Inf Teleop Twist");
-      return;
+    DriveMode mode = DriveMode::NONE;
+    if (msg.data == "NAVIGATION") {
+      mode = DriveMode::NAVIGATION;
+    } else if (msg.data == "MANUAL") {
+      mode = DriveMode::MANUAL;
+    } else if (msg.data != "NONE") {
+      RCLCPP_WARN(
+        get_logger(),
+        "Unknown drive mode '%s'; treating it as NONE",
+        msg.data.c_str());
     }
-
-    const bool zero = zero_twist(msg);
-    bool trigger_recenter = false;
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
-
-      teleop_cmd_ = msg;
-      teleop_stamp_ = now();
-      have_teleop_ = true;
-
-      // teleop_twist_keyboard 的 k 会发送全零 Twist
-      if (zero && !teleop_zero_latched_) {
-        teleop_zero_latched_ = true;
-        trigger_recenter = true;
-      } else if (!zero) {
-        teleop_zero_latched_ = false;
+      drive_mode_ = mode;
+      if (drive_mode_ != DriveMode::NAVIGATION) {
+        nav_recenter_pending_ = false;
       }
     }
 
-    if (trigger_recenter) {
-      request_recenter("teleop zero / keyboard k");
-    }
+    const char * name =
+      mode == DriveMode::NAVIGATION ? "NAVIGATION" :
+      mode == DriveMode::MANUAL ? "MANUAL" : "NONE";
+    RCLCPP_INFO(get_logger(), "cmd_vel drive mode -> %s", name);
   }
 
   void tick()
   {
-    enum class Source { NONE, NAV, BEHAVIOR, TELEOP };
     geometry_msgs::msg::Twist output;
     Source source = Source::NONE;
     const auto stamp = now();
+    bool source_changed = false;
+    bool trigger_recenter = false;
+
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      const bool teleop_fresh = have_teleop_ &&
-        (stamp - teleop_stamp_).seconds() <= teleop_timeout_;
       const bool behavior_fresh = have_behavior_ &&
         (stamp - behavior_stamp_).seconds() <= behavior_timeout_;
       const bool nav_fresh = have_nav_ &&
         (stamp - nav_stamp_).seconds() <= nav_timeout_;
 
-      if (teleop_fresh) {
-        output = teleop_cmd_;
-        source = Source::TELEOP;
-      } else if (behavior_fresh) {
+      if (behavior_fresh) {
         output = behavior_cmd_;
         source = Source::BEHAVIOR;
       } else if (nav_fresh) {
         output = nav_cmd_;
         source = Source::NAV;
       }
+      const bool nav_to_none = last_source_ == Source::NAV && source == Source::NONE;
+      source_changed = source != last_source_;
+      last_source_ = source;
+
+      // A raw navigation publisher going quiet is only allowed to arm recenter
+      // while the final mode mux is still selecting autonomous navigation.
+      if (nav_to_none && drive_mode_ == DriveMode::NAVIGATION) {
+        nav_recenter_pending_ = true;
+        nav_recenter_pending_since_ = stamp;
+      }
+
+      // A resumed autonomous source or leaving NAVIGATION mode invalidates the
+      // idle window. This prevents recenter while the chassis is under manual
+      // control, without feeding final /cmd_vel back into this arbiter.
+      if (source != Source::NONE || drive_mode_ != DriveMode::NAVIGATION) {
+        nav_recenter_pending_ = false;
+      }
+
+      if (nav_recenter_pending_ &&
+        (stamp - nav_recenter_pending_since_).seconds() >= nav_recenter_delay_sec_)
+      {
+        nav_recenter_pending_ = false;
+        trigger_recenter = true;
+      }
     }
 
-    const int source_id = static_cast<int>(source);
-
-    const bool nav_to_none =
-      last_source_id_ == static_cast<int>(Source::NAV) &&
-      source == Source::NONE;
-
-    if (source_id != last_source_id_) {
+    if (source_changed) {
       const char * name =
-        source == Source::TELEOP ? "teleop" :
         source == Source::BEHAVIOR ? "behavior" :
         source == Source::NAV ? "nav" : "none";
-
-      RCLCPP_INFO(
-        get_logger(),
-        "cmd_vel active source -> %s",
-        name);
-
-      last_source_id_ = source_id;
+      RCLCPP_INFO(get_logger(), "autonomous cmd_vel active source -> %s", name);
     }
 
     pub_->publish(output);
 
-    // NAV -> NONE is not sufficient evidence that navigation finished. During
-    // recovery, TF hiccups, or controller restarts Nav2 can briefly stop
-    // publishing velocity commands and then resume. Arm a pending recenter, but
-    // only execute it after a stable idle window with no active command source.
-    if (nav_to_none) {
-      nav_recenter_pending_ = true;
-      nav_recenter_pending_since_ = stamp;
+    if (trigger_recenter) {
+      request_recenter("navigation finished / stable idle in NAVIGATION mode");
     }
-
-    // Any active source means the idle gap was temporary, so do not recenter.
-    if (source != Source::NONE) {
-      nav_recenter_pending_ = false;
-    }
-
-    if (nav_recenter_pending_ &&
-      source == Source::NONE &&
-      (stamp - nav_recenter_pending_since_).seconds() >= nav_recenter_delay_sec_)
-    {
-      nav_recenter_pending_ = false;
-      request_recenter("navigation finished / stable idle");
-    }
-  }
-
-  static bool zero_twist(const geometry_msgs::msg::Twist & msg)
-  {
-    return
-      std::abs(msg.linear.x) < 1e-6 &&
-      std::abs(msg.linear.y) < 1e-6 &&
-      std::abs(msg.angular.z) < 1e-6;
   }
 
   void request_recenter(const char * reason)
@@ -230,34 +206,28 @@ private:
   std::mutex mutex_;
   geometry_msgs::msg::Twist nav_cmd_{};
   geometry_msgs::msg::Twist behavior_cmd_{};
-  geometry_msgs::msg::Twist teleop_cmd_{};
   rclcpp::Time nav_stamp_{0, 0, RCL_ROS_TIME};
   rclcpp::Time behavior_stamp_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time teleop_stamp_{0, 0, RCL_ROS_TIME};
   bool have_nav_{false};
   bool have_behavior_{false};
-  bool have_teleop_{false};
-  int last_source_id_{-1};
+  Source last_source_{Source::NONE};
+  DriveMode drive_mode_{DriveMode::NONE};
 
   std::string nav_topic_;
   std::string behavior_topic_;
-  std::string teleop_topic_;
-  std::string teleop_alias_topic_;
   std::string output_topic_;
+  std::string mode_topic_;
   double nav_timeout_{0.35};
   double behavior_timeout_{0.40};
-  double teleop_timeout_{0.80};
   double nav_recenter_delay_sec_{1.50};
   double publish_frequency_{50.0};
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr nav_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr behavior_sub_;
-  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_sub_;
-  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr teleop_alias_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
-  bool teleop_zero_latched_{false};
   bool nav_recenter_pending_{false};
   rclcpp::Time nav_recenter_pending_since_{0, 0, RCL_ROS_TIME};
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr recenter_client_;

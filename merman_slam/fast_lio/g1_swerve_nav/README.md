@@ -1,11 +1,17 @@
-# v9-fix2: command handoff and stalled-steering robustness
+# Current command handoff and steering-recenter behavior
 
-This package keeps the v9 exact kinematics and coordinated branch design, with
-small runtime fixes based on the latest robot log:
+The current runtime keeps the v9 exact kinematics and coordinated branch design,
+and separates autonomous safety processing from the final manual/navigation
+mode selection:
 
-- teleop freshness increased from 0.40 s to 0.80 s to reduce keyboard source dropouts;
-- automatic steering recenter no longer treats every `NAV -> NONE` gap as goal completion;
-  it requires 1.5 s of stable idle and is canceled if any source resumes;
+- the autonomous arbiter selects only behavior or navigation commands;
+- navigation always passes through velocity smoothing and collision monitoring
+  before the final mode mux;
+- joystick and selected keyboard commands bypass collision monitoring;
+- navigation recenter requires `NAVIGATION` mode plus 1.5 s of stable autonomous
+  idle, and is canceled if a source resumes or the mode changes;
+- a selected joystick nonzero-to-zero transition and an explicit selected
+  keyboard zero each request steering recenter once;
 - a new intentional motion command can cancel an in-progress recenter after the
   recenter PP target has actually been sent;
 - fixed steering targets used by large-settle and coordinated-branch states are
@@ -70,27 +76,31 @@ ROS 2 Humble package for a true 3-DOF planar four-wheel independent steering / f
 
 The package does **not** inherit the old chassis state machine or old navigation behavior. The supplied historical files were used only to recover hardware facts: geometry, topic/message units, and wheel ordering.
 
-The command chain is:
+The normal command chain is:
 
 ```text
-Nav2 MPPI Omni (/cmd_vel_nav) ----\
-                                  > cmd_vel_arbiter
-Teleop (/cmd_vel or /cmd_vel_teleop) --------/        |
-                                           v
-                                  /cmd_vel_selected
-                                           |
-                                  velocity_smoother
-                                           |
-                                  /cmd_vel_smoothed
-                                           |
-                                  collision_monitor
-                                           |
-                                    /cmd_vel_safe
-                                           |
-                                  swerve_controller
-                                      /          \
-                     /steer/position_cmd     /wheel_control_can/wheel_rpm_cmd
+Nav2 / TaskManager (/cmd_vel_nav) -----\
+                                        > cmd_vel_arbiter -> /cmd_vel_selected
+Nav2 recovery (/cmd_vel_behavior) -----/                         |
+                                                        velocity_smoother
+                                                                 |
+                                                        /cmd_vel_smoothed
+                                                                 |
+                                                        collision_monitor
+                                                                 |
+                                                        /cmd_vel_safe --------\
+                                                                               > mode mux -> /cmd_vel
+Joystick (/cmd_vel_joy) ------------------------------------------------------/
+                                                                                  |
+                                                                         swerve_controller
+                                                                          /             \
+                                                         /steer/position_cmd  /wheel_control_can/wheel_rpm_cmd
 ```
+
+In `MANUAL`, the mux selects `/cmd_vel_joy`; in `NAVIGATION`, it selects
+`/cmd_vel_safe`. The mux publishes its latched state on `/cmd_vel_mux/mode` so
+the autonomous arbiter cannot mistake a navigation publisher timeout during
+manual driving for navigation completion.
 
 Fast-LIO / localization remains external and must provide `/Odometry_loc` and TF. The 2D map remains external and must provide `/map`.
 
@@ -210,9 +220,21 @@ ros2 launch g1_swerve_nav controller.launch.py
 
 ## Keyboard input
 
-The standard ROS `teleop_twist_keyboard` may publish to `/cmd_vel` directly. `/cmd_vel_teleop` remains a compatible alias.
+With the normal mode mux running, remap keyboard output to its dedicated input:
 
-The arbiter gives a fresh teleop command priority over Nav2 for 0.4 s. Nav2 automatically resumes when teleop stops publishing. Do not publish keyboard Twist directly to `/cmd_vel_safe` because that bypasses the velocity smoother and collision monitor.
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+  --ros-args -r cmd_vel:=/cmd_vel_keyboard
+```
+
+Keyboard commands selected by the mux publish directly to final `/cmd_vel`, so
+they do not enter collision monitoring. An explicit keyboard zero requests
+steering recenter once.
+
+For maintenance, the standard unremapped keyboard or Qt chassis panel may still
+publish `/cmd_vel` directly, but only while `cmd_vel_mux_node` is stopped and no
+navigation task is active. This intentionally bypasses both mode arbitration
+and collision monitoring; use the recenter service explicitly if required.
 
 ## Initial low-speed validation sequence
 
@@ -238,10 +260,12 @@ The default `SmacPlanner2D + MPPI Omni` is selected for first-pass robustness. O
 
 ## v2 runtime fixes
 
-- Plain `ros2 run teleop_twist_keyboard teleop_twist_keyboard` now works on `/cmd_vel`.
-- `/cmd_vel_teleop` remains accepted as an alias.
+- This section describes the historical v2 behavior; current command routing is
+  documented in **Design goal** and **Keyboard input** above.
+- Plain `ros2 run teleop_twist_keyboard teleop_twist_keyboard` worked on `/cmd_vel`.
+- `/cmd_vel_teleop` was accepted as an alias.
 - Nav2 recovery velocity is isolated on `/cmd_vel_behavior`.
-- Arbiter priority is teleop > behavior > navigation.
+- Arbiter priority was teleop > behavior > navigation.
 - Progress checker allowance is increased for steering-vector transitions.
 - MPPI batch size is reduced to improve 20 Hz deadline margin.
 - TwirlingCritic is removed so combined translation + yaw is not unnecessarily penalized.

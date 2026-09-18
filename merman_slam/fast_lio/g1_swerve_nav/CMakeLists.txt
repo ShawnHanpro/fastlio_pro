@@ -28,7 +28,7 @@ ament_target_dependencies(swerve_controller
 
 add_executable(cmd_vel_arbiter src/cmd_vel_arbiter.cpp)
 target_compile_features(cmd_vel_arbiter PUBLIC cxx_std_17)
-ament_target_dependencies(cmd_vel_arbiter rclcpp geometry_msgs std_srvs)
+ament_target_dependencies(cmd_vel_arbiter rclcpp geometry_msgs std_msgs std_srvs)
 
 install(DIRECTORY include/ DESTINATION include)
 install(TARGETS

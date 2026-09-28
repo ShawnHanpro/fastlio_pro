@@ -28,15 +28,6 @@ bool TaskManager::Start()
 
     StopRotation();
 
-    // 新任务开始时，清除上一个任务保存的Nav2点
-    {
-        std::lock_guard<std::mutex> lock(
-            last_nav2_point_mutex_);
-
-        has_last_nav2_point_ = false;
-        last_nav2_point_ = {};
-    }
-
     // task_finished_.store(false);
     // has_error_.store(false);
     nav2_success_handled_.store(false);
@@ -266,15 +257,6 @@ bool TaskManager::PauseTask(bool pause_task)
 
             return true;
         }
-    }
-
-    /*
-     * 只有不是等待 audio_done 的状态，
-     * 才说明暂停发生在导航过程中，需要重新下发当前点。
-     */
-    {
-        std::lock_guard<std::mutex> lock(last_nav2_point_mutex_);
-        has_last_nav2_point_ = false;
     }
 
     nav2_success_handled_.store(false);
@@ -593,8 +575,6 @@ bool TaskManager::SetNav2Waypoints()
         return false;
     }
     
-    constexpr double kPositionToleranceMeters = 0.05;
-
     WayPoints waypoint;
 
     {
@@ -615,75 +595,6 @@ bool TaskManager::SetNav2Waypoints()
         waypoint = current_waypoint_;
     }
 
-    // ============================================================
-    // 判断当前点和上一次成功发送给Nav2的点之间的XY距离
-    // ============================================================
-    bool skip_nav2_navigation = false;
-    double position_distance = 0.0;
-    double delta_x = 0.0;
-    double delta_y = 0.0;
-
-    {
-        std::lock_guard<std::mutex> lock(
-            last_nav2_point_mutex_);
-
-        if (has_last_nav2_point_) {
-            delta_x =
-                waypoint.point.x - last_nav2_point_.x;
-
-            delta_y =
-                waypoint.point.y - last_nav2_point_.y;
-
-            position_distance =
-                std::hypot(delta_x, delta_y);
-
-            skip_nav2_navigation =
-                position_distance <
-                kPositionToleranceMeters;
-        }
-    }
-
-    // ============================================================
-    // 距离小于5cm：
-    // 不发送Nav2，直接执行到点处理
-    // ============================================================
-    if (skip_nav2_navigation) {
-        std::cout
-            << "[TaskManager] 当前点与上一次Nav2点距离小于5cm，"
-            << "跳过Nav2导航，直接执行到点处理:"
-            << " id=" << waypoint.point_id
-            << ", x=" << waypoint.point.x
-            << ", y=" << waypoint.point.y
-            << ", theta=" << waypoint.point.theta
-            << ", delta_x=" << delta_x
-            << ", delta_y=" << delta_y
-            << ", distance=" << position_distance
-            << std::endl;
-
-        /*
-         * 当前点没有发送Nav2，因此不能等待Nav2的succeeded。
-         *
-         * 设置为true，可以避免上一个Nav2任务延迟发送的
-         * succeeded状态被错误地当作当前点的状态处理。
-         */
-        nav2_success_handled_.store(true);
-
-        if (!StartRotationAsync(waypoint)) {
-            std::cerr
-                << "[TaskManager] 跳过Nav2后启动到点处理失败:"
-                << " id=" << waypoint.point_id
-                << std::endl;
-
-            task_running_.store(false);
-            return false;
-        }
-
-        return true;
-    }
-
-    // ============================================================
-    // 距离大于等于5cm，正常发送给Nav2
-    // ============================================================
     std::vector<NavigationWaypoint> nav2_waypoints;
     nav2_waypoints.emplace_back(waypoint.point);
 
@@ -698,12 +609,6 @@ bool TaskManager::SetNav2Waypoints()
         << ", y=" << waypoint.point.y
         << ", theta=" << waypoint.point.theta;
 
-    if (has_last_nav2_point_) {
-        std::cout
-            << ", distance_from_last_nav2_point="
-            << position_distance;
-    }
-
     std::cout << std::endl;
 
     if (!set_nav2_waypoints(nav2_waypoints)) {
@@ -714,19 +619,6 @@ bool TaskManager::SetNav2Waypoints()
 
         task_running_.store(false);
         return false;
-    }
-
-    /*
-     * 只有发送成功后，才把当前点记录为
-     * “上一次成功发送给Nav2的点”。
-     */
-    {
-        std::lock_guard<std::mutex> lock(
-            last_nav2_point_mutex_);
-
-        last_nav2_point_.x = waypoint.point.x;
-        last_nav2_point_.y = waypoint.point.y;
-        has_last_nav2_point_ = true;
     }
 
     return true;

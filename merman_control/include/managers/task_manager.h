@@ -140,12 +140,6 @@ private:
     std::atomic<bool> rotation_running_{false};
     std::atomic<bool> rotation_stop_requested_{false};
 
-    // 上一次成功发送给 Nav2 的位置
-    std::mutex last_nav2_point_mutex_;
-
-    bool has_last_nav2_point_{false};
-    NavigationWaypoint last_nav2_point_;
-
 private:
     std::vector<WayPoints> waypoints_;
     WayPoints current_waypoint_;

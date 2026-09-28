@@ -98,7 +98,12 @@ controller_server:
 
       simulate_ahead_time: 1.0
 
-      rotate_to_goal_heading: true
+      # Nav2 Humble's RotationShimController stamps the goal with now() and
+      # waits up to 100 ms for TF on every control cycle when this is enabled.
+      # FAST-LIO publishes odom/TF at 10 Hz, so that blocks this 20 Hz loop and
+      # produces continuous rate misses / future-extrapolation errors. MPPI's
+      # GoalAngleCritic below already owns final-yaw convergence.
+      rotate_to_goal_heading: false
       closed_loop: false
       
       motion_model: "Omni"

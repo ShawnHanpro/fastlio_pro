@@ -1,0 +1,26 @@
+points:
+- id: 1
+  type: task
+  x: 0.9327
+  y: -0.9063
+  theta: -0.5459
+- id: 2
+  type: task
+  x: 0.9454
+  y: -0.9629
+  theta: -1.5084
+- id: 3
+  type: task
+  x: 0.9758
+  y: -1.6451
+  theta: -1.5137
+- id: 4
+  type: task
+  x: 0.9473
+  y: -1.6525
+  theta: -3.0669
+- id: 5
+  type: task
+  x: 0.9124
+  y: -1.6434
+  theta: 2.1579
